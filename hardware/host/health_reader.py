@@ -1,0 +1,232 @@
+"""
+Host-side reader for the Basys 3 four-region FPGA health monitor.
+
+The board streams one ASCII-hex line per reading, for example:
+    R1=0007D0,R2=...,R3=...,R4=...,T=994,I=555,A=99A,B=555,F=F,S=0,H=1
+
+This script converts the raw codes to physical units, learns a per-board
+baseline, and classifies every region as HEALTHY / WARNING / DEGRADED.
+
+Usage
+-----
+    python health_reader.py --selftest
+    python health_reader.py --port COM3 --calibrate 30 --board boardA
+    python health_reader.py --port COM3 --board boardA          # live monitor
+    python health_reader.py --replay log.txt --board boardA     # offline
+
+Calibration is stored per board in calibration_<board>.json next to this file, so
+two boards (e.g. one left healthy, one stressed) each keep their own baseline.
+"""
+
+import argparse
+import json
+import re
+import statistics
+import sys
+import time
+from pathlib import Path
+
+LINE_RE = re.compile(
+    r"^R1=(?P<r1>[0-9A-F]{6}),R2=(?P<r2>[0-9A-F]{6}),R3=(?P<r3>[0-9A-F]{6}),"
+    r"R4=(?P<r4>[0-9A-F]{6}),T=(?P<t>[0-9A-F]{3}),I=(?P<i>[0-9A-F]{3}),"
+    r"A=(?P<a>[0-9A-F]{3}),B=(?P<b>[0-9A-F]{3}),F=(?P<f>[0-9A-F]),"
+    r"S=(?P<s>[0-9A-F]),H=(?P<h>[0-9A-F])$"
+)
+
+GATE_SECONDS = 0.010            # must match GATE_TICKS / 100 MHz in the RTL
+REGIONS = ("R1", "R2", "R3", "R4")
+
+# Every limit comes from the single source of truth (health_rules.py at the repo root)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import health_rules as rules  # noqa: E402
+
+HEALTHY, WARNING, DEGRADED = rules.HEALTHY, rules.WARNING, rules.DEGRADED
+UNCAL = "Uncalibrated"
+RANK = {UNCAL: 0, HEALTHY: 1, WARNING: 2, DEGRADED: 3}
+
+
+def parse_line(line):
+    """Return a dict of physical readings, or None if the line is malformed."""
+    m = LINE_RE.match(line.strip())
+    if not m:
+        return None
+    g = {k: int(v, 16) for k, v in m.groupdict().items()}
+    alive = [bool(g["f"] >> n & 1) for n in range(4)]
+    stress = [bool(g["s"] >> n & 1) for n in range(4)]
+    freq = {}
+    for n, name in enumerate(REGIONS):
+        count = g[name.lower()]
+        freq[name] = count / GATE_SECONDS / 1e6 if alive[n] else 0.0   # MHz
+    return {
+        "freq_mhz": freq,
+        "alive": dict(zip(REGIONS, alive)),
+        "stress": dict(zip(REGIONS, stress)),
+        "temp_c": g["t"] * 503.975 / 4096 - 273.15,
+        "VCCINT": g["i"] * 3.0 / 4096,
+        "VCCAUX": g["a"] * 3.0 / 4096,
+        "VCCBRAM": g["b"] * 3.0 / 4096,
+        "board_verdict": {0: UNCAL, 1: HEALTHY, 2: WARNING, 3: DEGRADED}[g["h"] & 3],
+    }
+
+
+def _calib_path(board):
+    return Path(__file__).with_name(f"calibration_{board}.json")
+
+
+def build_calibration(samples):
+    """Baseline = mean/std of each region's frequency over healthy-state samples."""
+    cal = {"regions": {}, "temp_c": statistics.mean(s["temp_c"] for s in samples)}
+    for r in REGIONS:
+        vals = [s["freq_mhz"][r] for s in samples if s["alive"][r]]
+        if len(vals) < 5:
+            raise RuntimeError(f"{r}: oscillator not alive during calibration")
+        cal["regions"][r] = {"mean_mhz": statistics.mean(vals),
+                             "std_mhz": statistics.pstdev(vals)}
+    return cal
+
+
+def classify(reading, cal):
+    """Return (overall_state, {region: state}, [reasons])."""
+    reasons, regions = [], {}
+    for r in REGIONS:
+        if not reading["alive"][r]:
+            regions[r] = DEGRADED
+            reasons.append(f"{r}: ring oscillator not running")
+        elif cal is None:
+            regions[r] = UNCAL
+        else:
+            base = cal["regions"][r]["mean_mhz"]
+            regions[r] = rules.classify_region(reading["freq_mhz"][r], base)
+            if regions[r] != HEALTHY:
+                drop = (1.0 - reading["freq_mhz"][r] / base) * 100.0
+                reasons.append(f"{r}: RO frequency down {drop:.2f} % vs baseline")
+
+    sensor = rules.classify_temperature(reading["temp_c"])
+    if sensor != HEALTHY:
+        reasons.append(f"die temperature {reading['temp_c']:.1f} C")
+    for rail in rules.VOLT_NOMINAL_V:
+        level = rules.classify_voltage(rail, reading[rail])
+        if level != HEALTHY:
+            reasons.append(f"{rail} {reading[rail]:.3f} V")
+        if RANK[level] > RANK[sensor]:
+            sensor = level
+
+    # Same aggregation as the dashboard and the board LEDs: the regions change the overall
+    # state only when at least REGION_QUORUM of them are Warning/Degraded; sensors always count.
+    n_deg = sum(1 for s in regions.values() if s == DEGRADED)
+    n_warn = sum(1 for s in regions.values() if s == WARNING)
+    region_overall = HEALTHY
+    if n_deg + n_warn >= rules.REGION_QUORUM:
+        region_overall = DEGRADED if n_deg else WARNING
+    elif n_deg + n_warn:
+        reasons.append(f"isolated region fault (quorum is {rules.REGION_QUORUM}); overall state unchanged")
+
+    if DEGRADED in (region_overall, sensor):
+        overall = DEGRADED
+    elif WARNING in (region_overall, sensor):
+        overall = WARNING
+    elif UNCAL in regions.values():
+        overall = UNCAL
+    else:
+        overall = HEALTHY
+    return overall, regions, reasons
+
+
+def lines_from_serial(port, baud=115200):
+    import serial  # pyserial
+    with serial.Serial(port, baud, timeout=2) as ser:
+        while True:
+            raw = ser.readline()
+            if raw:
+                yield raw.decode("ascii", errors="ignore")
+
+
+def lines_from_file(path):
+    with open(path, "r", encoding="ascii", errors="ignore") as fh:
+        yield from fh
+
+
+def show(reading, cal):
+    overall, regions, reasons = classify(reading, cal)
+    freqs = "  ".join(f"{r} {reading['freq_mhz'][r]:7.2f} MHz {regions[r]:<12}" for r in REGIONS)
+    print(f"T={reading['temp_c']:5.1f}C  VINT={reading['VCCINT']:.3f}  VAUX={reading['VCCAUX']:.3f}  "
+          f"VBRAM={reading['VCCBRAM']:.3f}  | {freqs}| => {overall}")
+    for why in reasons:
+        print(f"      - {why}")
+
+
+def selftest():
+    sample = "R1=0107B8,R2=0107B8,R3=0107B8,R4=0107B8,T=994,I=555,A=99A,B=555,F=F,S=0,H=1"
+    r = parse_line(sample)
+    assert r is not None
+    assert abs(r["freq_mhz"]["R1"] - 6.8) < 1.0 or r["freq_mhz"]["R1"] > 0
+    assert abs(r["VCCINT"] - 1.0) < 0.01 and abs(r["VCCAUX"] - 1.8) < 0.01
+    assert 25 < r["temp_c"] < 32
+    cal = build_calibration([r] * 10)
+    assert classify(r, cal)[0] == HEALTHY
+    slow = dict(r, freq_mhz={k: v * 0.99 for k, v in r["freq_mhz"].items()})
+    assert classify(slow, cal)[0] == WARNING
+    slower = dict(r, freq_mhz={k: v * 0.97 for k, v in r["freq_mhz"].items()})
+    assert classify(slower, cal)[0] == DEGRADED
+    dead = dict(r, alive=dict(r["alive"], R2=False), freq_mhz=dict(r["freq_mhz"], R2=0.0))
+    state, regions, _ = classify(dead, cal)
+    assert regions["R2"] == DEGRADED and state == HEALTHY          # one dead region: quorum not met
+    dead2 = dict(dead, alive=dict(dead["alive"], R3=False), freq_mhz=dict(dead["freq_mhz"], R3=0.0))
+    assert classify(dead2, cal)[0] == DEGRADED                      # two dead regions: quorum met
+    assert parse_line("garbage") is None
+    print("selftest OK")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--port", help="serial port, e.g. COM3")
+    ap.add_argument("--replay", help="read lines from a log file instead of a serial port")
+    ap.add_argument("--board", default="board", help="name used for the calibration file")
+    ap.add_argument("--calibrate", type=int, metavar="SECONDS",
+                    help="record a baseline for SECONDS while the board is known healthy")
+    ap.add_argument("--selftest", action="store_true")
+    args = ap.parse_args()
+
+    if args.selftest:
+        selftest()
+        return
+    if not (args.port or args.replay):
+        ap.error("give --port or --replay")
+
+    source = lines_from_serial(args.port) if args.port else lines_from_file(args.replay)
+
+    if args.calibrate:
+        print(f"Calibrating '{args.board}' for {args.calibrate} s - keep every stress switch OFF...")
+        end, samples = time.time() + args.calibrate, []
+        for line in source:
+            reading = parse_line(line)
+            if reading:
+                samples.append(reading)
+                print(f"  {len(samples)} samples", end="\r")
+            if time.time() >= end:
+                break
+        cal = build_calibration(samples)
+        _calib_path(args.board).write_text(json.dumps(cal, indent=2))
+        Path(__file__).with_name("active_board.txt").write_text(args.board)
+        print(f"\nSaved {_calib_path(args.board).name} (now the active board for the dashboard)")
+        for r in REGIONS:
+            c = cal["regions"][r]
+            print(f"  {r}: {c['mean_mhz']:.3f} MHz  (std {c['std_mhz']:.4f})")
+        return
+
+    cal = None
+    if _calib_path(args.board).exists():
+        cal = json.loads(_calib_path(args.board).read_text())
+    else:
+        print(f"No calibration for '{args.board}' - run with --calibrate first. Showing raw values.")
+    try:
+        for line in source:
+            reading = parse_line(line)
+            if reading:
+                show(reading, cal)
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    sys.exit(main())

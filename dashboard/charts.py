@@ -10,6 +10,17 @@ import pandas as pd
 import numpy as np
 import altair as alt
 
+# Reference lines come from the single source of truth (health_rules.py)
+from dashboard.config import (
+    SENSOR_CONFIG,
+    RO_FREQ_NOMINAL_MHZ,
+    RO_FREQ_WARNING_LOW_MHZ,
+    RO_FREQ_CRITICAL_LOW_MHZ,
+    RO_DELAY_NOMINAL_NS,
+    RO_DELAY_WARNING_HIGH_NS,
+    RO_DELAY_CRITICAL_HIGH_NS,
+)
+
 
 def apply_dark_theme(chart: alt.Chart) -> alt.Chart:
     """Applies a clean FPGA laboratory dark aesthetic to Altair charts."""
@@ -128,8 +139,8 @@ def compute_adaptive_y_domain(
 
 def create_temperature_chart(
     df: pd.DataFrame,
-    baseline_temp: float = 35.0,
-    warning_temp: float = 50.0,
+    baseline_temp: float = SENSOR_CONFIG["Temperature"]["nominal"],
+    warning_temp: float = SENSOR_CONFIG["Temperature"]["warning_high"],
     adaptive_scaling: bool = True,
     zoom_factor: float = 3.0
 ) -> alt.Chart:
@@ -188,9 +199,9 @@ def create_temperature_chart(
 
 def create_ro_frequency_chart(
     df: pd.DataFrame,
-    baseline_freq: float = 436.0,
-    warning_freq: float = 422.9,
-    critical_freq: float = 412.0,
+    baseline_freq: float = RO_FREQ_NOMINAL_MHZ,
+    warning_freq: float = RO_FREQ_WARNING_LOW_MHZ,
+    critical_freq: float = RO_FREQ_CRITICAL_LOW_MHZ,
     adaptive_scaling: bool = True,
     zoom_factor: float = 3.0
 ) -> alt.Chart:
@@ -209,9 +220,15 @@ def create_ro_frequency_chart(
             tooltips.append(alt.Tooltip(f"{r}:Q", title=f"{r} (MHz)", format=".2f"))
 
     if adaptive_scaling and "RO_Frequency" in plot_df.columns and not plot_df["RO_Frequency"].dropna().empty:
+        # Fit the axis to the measured data so its real irregular behaviour is visible. The
+        # baseline only shapes the axis when it is close to the data; otherwise its line is
+        # simply drawn outside the view (and widens the axis later if the data moves toward it).
+        _series = plot_df["RO_Frequency"].astype(float)
+        _spread = float(_series.max() - _series.min())
+        _near = abs(baseline_freq - float(_series.mean())) <= max(3.0 * _spread, 0.5)
         domain, is_small_dev = compute_adaptive_y_domain(
             plot_df["RO_Frequency"],
-            baseline=baseline_freq,
+            baseline=baseline_freq if _near else None,
             thresholds=[warning_freq, critical_freq],
             min_span=0.4,
             small_dev_threshold=1.5,
@@ -234,8 +251,7 @@ def create_ro_frequency_chart(
 
     # Baseline reference line
     base_df = pd.DataFrame({"y": [baseline_freq]})
-    base_rule = alt.Chart(base_df).mark_rule(
-        color="#38BDF8",
+    base_rule = alt.Chart(base_df).mark_rule(clip=True, color="#38BDF8",
         strokeDash=[3, 3],
         strokeWidth=1.2,
         opacity=0.8
@@ -243,8 +259,7 @@ def create_ro_frequency_chart(
 
     # Warning threshold reference line (e.g. 422.9 MHz)
     warn_df = pd.DataFrame({"y": [warning_freq]})
-    warn_rule = alt.Chart(warn_df).mark_rule(
-        color="#FFB300",
+    warn_rule = alt.Chart(warn_df).mark_rule(clip=True, color="#FFB300",
         strokeDash=[4, 4],
         strokeWidth=1.2,
         opacity=0.7
@@ -252,8 +267,7 @@ def create_ro_frequency_chart(
 
     # Critical threshold reference line (e.g. 412.0 MHz)
     crit_df = pd.DataFrame({"y": [critical_freq]})
-    crit_rule = alt.Chart(crit_df).mark_rule(
-        color="#FF1744",
+    crit_rule = alt.Chart(crit_df).mark_rule(clip=True, color="#FF1744",
         strokeDash=[4, 4],
         strokeWidth=1.2,
         opacity=0.7
@@ -264,15 +278,20 @@ def create_ro_frequency_chart(
 
 def create_ro_delay_chart(
     df: pd.DataFrame,
-    baseline_delay: float = 0.2294,
-    warning_delay: float = 0.2365,
-    critical_delay: float = 0.2427,
+    baseline_delay: float = RO_DELAY_NOMINAL_NS,
+    warning_delay: float = RO_DELAY_WARNING_HIGH_NS,
+    critical_delay: float = RO_DELAY_CRITICAL_HIGH_NS,
     adaptive_scaling: bool = True,
     zoom_factor: float = 3.0
 ) -> alt.Chart:
     """Graph 2: Ring Oscillator Delay Trend with adaptive deviation scaling."""
     plot_df = df.reset_index()
     plot_df["Sample_Index"] = plot_df.index
+    # tau = 100 / f_MHz at full precision: the stored column is rounded to 4 decimals, which
+    # shows up as stair-steps once the axis is zoomed in on small variations.
+    if "RO_Frequency" in plot_df.columns:
+        freq = plot_df["RO_Frequency"].astype(float)
+        plot_df["RO_Delay_ns"] = (100.0 / freq).where(freq > 0, plot_df.get("RO_Delay_ns"))
 
     if adaptive_scaling and "RO_Delay_ns" in plot_df.columns and not plot_df["RO_Delay_ns"].dropna().empty:
         domain, is_small_dev = compute_adaptive_y_domain(

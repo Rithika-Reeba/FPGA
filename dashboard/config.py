@@ -33,17 +33,23 @@ RO_STAGES: int = getattr(config, "RO_STAGES", 5)
 DEVICE_NAME: str = getattr(config, "DEVICE_NAME", "Xilinx Artix-7 (XC7A35T-1CPG236C)")
 ARCHITECTURE: str = getattr(config, "ARCHITECTURE", "28nm HKMG (High-K Metal Gate)")
 
-# Nominal RO frequency with mutual fallback between alias names
-RO_NOMINAL_MHZ: float = getattr(config, "RO_NOMINAL_MHZ", 436.0)
-RO_FREQ_NOMINAL_MHZ: float = getattr(config, "RO_FREQ_NOMINAL_MHZ", RO_NOMINAL_MHZ)
+# Nominal RO frequency and boundaries come straight from the single source of truth.
+# (They must NOT be read via `import config`: when Streamlit runs dashboard/app.py, the
+# dashboard folder is first on sys.path, so `config` can resolve to THIS file instead of
+# the root config.py and silently fall back to stale literals.)
+import health_rules as _hr
 
-# Operating & safety frequency boundaries
-RO_FREQ_OPERATING_MIN_MHZ: float = getattr(config, "RO_FREQ_OPERATING_MIN_MHZ", 427.0)
-RO_FREQ_OPERATING_MAX_MHZ: float = getattr(config, "RO_FREQ_OPERATING_MAX_MHZ", 445.0)
-RO_FREQ_WARNING_LOW_MHZ: float = getattr(config, "RO_FREQ_WARNING_LOW_MHZ", 423.0)
-RO_FREQ_WARNING_HIGH_MHZ: float = getattr(config, "RO_FREQ_WARNING_HIGH_MHZ", 447.0)
-RO_FREQ_CRITICAL_LOW_MHZ: float = getattr(config, "RO_FREQ_CRITICAL_LOW_MHZ", 412.0)
-RO_FREQ_CRITICAL_HIGH_MHZ: float = getattr(config, "RO_FREQ_CRITICAL_HIGH_MHZ", 460.0)
+_ro_limits = _hr.ro_limits(_hr.global_nominal_mhz())
+RO_NOMINAL_MHZ: float = _ro_limits["nominal"]
+RO_FREQ_NOMINAL_MHZ: float = _ro_limits["nominal"]
+
+# Operating & safety frequency boundaries (healthy envelope = between the warning bounds)
+RO_FREQ_OPERATING_MIN_MHZ: float = _ro_limits["warn_low"]
+RO_FREQ_OPERATING_MAX_MHZ: float = _ro_limits["warn_high"]
+RO_FREQ_WARNING_LOW_MHZ: float = _ro_limits["warn_low"]
+RO_FREQ_WARNING_HIGH_MHZ: float = _ro_limits["warn_high"]
+RO_FREQ_CRITICAL_LOW_MHZ: float = _ro_limits["crit_low"]
+RO_FREQ_CRITICAL_HIGH_MHZ: float = _ro_limits["crit_high"]
 
 # Derived delay thresholds
 RO_DELAY_NOMINAL_NS: float = getattr(config, "RO_DELAY_NOMINAL_NS", round(100.0 / RO_FREQ_NOMINAL_MHZ, 4))
@@ -368,6 +374,54 @@ REGIONAL_CONFIG: Dict[str, Dict[str, Any]] = {
 
 
 # =============================================================================
+# Apply the single source of truth (health_rules.py) to every per-region and
+# per-channel limit above, so the literals in this file can never drift from it.
+# =============================================================================
+import health_rules as _rules
+
+REGION_QUORUM: int = _rules.REGION_QUORUM
+
+
+def _apply_health_rules() -> None:
+    for r_id, meta in REGIONAL_CONFIG.items():
+        nom = _rules.region_nominal_mhz(r_id)
+        lim = _rules.ro_limits(nom)
+        meta["nominal_freq"] = round(nom, 2)
+        meta["nominal_delay_ns"] = round(100.0 / nom, 4)
+        meta["warning_drop_pct"] = _rules.RO_WARN_DROP_PCT
+        meta["critical_drop_pct"] = _rules.RO_CRIT_DROP_PCT
+        meta["warning_freq"] = round(lim["warn_low"], 2)
+        meta["warning_delay_ns"] = round(100.0 / lim["warn_low"], 4)
+        meta["critical_freq"] = round(lim["crit_low"], 2)
+        meta["critical_delay_ns"] = round(100.0 / lim["crit_low"], 4)
+
+    t = SENSOR_CONFIG["Temperature"]
+    t.update({"operating_max": _rules.TEMP_WARN_C, "warning_high": _rules.TEMP_WARN_C,
+              "critical_high": _rules.TEMP_CRIT_C, "warning": _rules.TEMP_WARN_C,
+              "critical": _rules.TEMP_CRIT_C})
+
+    for rail in ("VCCINT", "VCCAUX", "VCCBRAM"):
+        v = _rules.volt_limits(rail)
+        SENSOR_CONFIG[rail].update({
+            "operating_min": v["warn_low"], "operating_max": v["warn_high"],
+            "warning_low": v["warn_low"], "warning_high": v["warn_high"],
+            "critical_low": v["crit_low"], "critical_high": v["crit_high"],
+        })
+
+    SENSOR_CONFIG["Error_Rate"].update({"operating_max": _rules.ERROR_RATE_WARN,
+                                        "warning_high": _rules.ERROR_RATE_CRIT,
+                                        "critical_high": _rules.ERROR_RATE_CRIT})
+
+    ro = SENSOR_CONFIG["RO_Frequency"]
+    ro.update({"warning_drop_pct": _rules.RO_WARN_DROP_PCT, "critical_drop_pct": _rules.RO_CRIT_DROP_PCT})
+    dl = SENSOR_CONFIG["RO_Delay_ns"]
+    dl.update({"warning_increase_pct": _rules.RO_WARN_DROP_PCT, "critical_increase_pct": _rules.RO_CRIT_DROP_PCT})
+
+
+_apply_health_rules()
+
+
+# =============================================================================
 # Regional Frequency Weighting & Independent Fault Assessment Architecture
 # =============================================================================
 # Default weights: Equal weighting across all four symmetric silicon regions.
@@ -384,12 +438,7 @@ REGIONAL_CONFIG: Dict[str, Dict[str, Any]] = {
 #   critical limit violation. Independent regional fault detection takes precedence
 #   over any averaging or weighting scheme.
 # =============================================================================
-DEFAULT_REGIONAL_WEIGHTS: Dict[str, float] = {
-    "R1": 0.35,
-    "R2": 0.05,
-    "R3": 0.30,
-    "R4": 0.30
-}
+DEFAULT_REGIONAL_WEIGHTS: Dict[str, float] = dict(_rules.REGION_WEIGHTS)
 
 
 def validate_regional_weights(
@@ -757,7 +806,7 @@ def validate_regional_baseline(
             f"Unhealthy baseline ({b_val:.1f} MHz < {warn_bound:.1f} MHz warning boundary) rejected; fell back to factory nominal ({f_nom:.1f} MHz)"
         )
 
-    crit_high = float(SENSOR_CONFIG["RO_Frequency"]["critical_high"])
+    crit_high = f_nom * (1.0 + _rules.RO_RISE_CRIT_PCT / 100.0)
     if b_val > crit_high:
         return (
             False,
@@ -911,8 +960,9 @@ def evaluate_regional_health(
     base_delay_ns = calculate_ro_delay_ns(f_base, stages=RO_STAGES)
     delay_drift_pct = ((delay_ns - base_delay_ns) / base_delay_ns) * 100.0 if base_delay_ns > 0 else 0.0
 
-    crit_high = float(SENSOR_CONFIG["RO_Frequency"]["critical_high"])
-    warn_high = float(SENSOR_CONFIG["RO_Frequency"]["warning_high"])
+    # Over-frequency limits are per region (relative to that region's own nominal/baseline)
+    crit_high = f_nom * (1.0 + _rules.RO_RISE_CRIT_PCT / 100.0)
+    warn_high = f_nom * (1.0 + _rules.RO_RISE_WARN_PCT / 100.0)
 
     # Step 5: Hard Critical Limits Evaluation (Absolute Precedence over Drift)
     if f_meas <= crit_bound or drift_pct <= -crit_drop or f_meas >= crit_high:
@@ -1733,11 +1783,11 @@ def evaluate_engineering_limits(
             w_eval_sev = LimitSeverity.WARNING
             w_eval_reason = f"Weighted RO average ({w_freq:.1f} MHz) breached warning boundary ({cfg_ro['warning_low']:.1f} MHz)"
 
-    if has_regional_data and total_degrading_pblocks >= 2:
+    if has_regional_data and total_degrading_pblocks >= REGION_QUORUM:
         # Multi-pblock degradation: quorum met! Changes overall main value to Degraded/Warning
         quorum_triggered = True
         worst_region = worst_reg_id
-        if len(degraded_pblocks) >= 2 or (len(degraded_pblocks) >= 1 and total_degrading_pblocks >= 2):
+        if len(degraded_pblocks) >= REGION_QUORUM or (len(degraded_pblocks) >= 1 and total_degrading_pblocks >= REGION_QUORUM):
             if max_sev != LimitSeverity.PHYSICALLY_INVALID:
                 max_sev = LimitSeverity.CRITICAL
             has_hard_viol = True
@@ -1750,7 +1800,7 @@ def evaluate_engineering_limits(
             measured_str = worst_reg_meas
             limit_str = worst_reg_lim
             derived_delay_str = worst_reg_delay
-        elif len(warning_pblocks) >= 2:
+        elif len(warning_pblocks) >= REGION_QUORUM:
             if max_sev == LimitSeverity.NORMAL:
                 max_sev = LimitSeverity.WARNING
             has_hard_viol = True
@@ -1764,8 +1814,10 @@ def evaluate_engineering_limits(
                 measured_str = worst_reg_meas
                 limit_str = worst_reg_lim
                 derived_delay_str = worst_reg_delay
-    elif w_eval_sev in (LimitSeverity.CRITICAL, LimitSeverity.WARNING):
-        # Aggregate weighted RO average itself breached limits
+    elif w_eval_sev in (LimitSeverity.CRITICAL, LimitSeverity.WARNING) and not has_regional_data:
+        # Aggregate weighted RO average breached limits. Only used when no per-region data
+        # exists: with regional baselines the regions + quorum policy govern, otherwise one
+        # isolated bad region would drag the average and change the overall state by itself.
         worst_region = worst_reg_id
         if w_eval_sev == LimitSeverity.CRITICAL:
             if max_sev != LimitSeverity.PHYSICALLY_INVALID:
@@ -1788,7 +1840,7 @@ def evaluate_engineering_limits(
                 primary_channel = "RO_Frequency"
                 measured_str = f"{w_freq:.1f} MHz"
                 limit_str = f"{SENSOR_CONFIG['RO_Frequency']['warning_low']:.1f} MHz"
-    elif has_regional_data and total_degrading_pblocks == 1:
+    elif has_regional_data and 0 < total_degrading_pblocks < REGION_QUORUM:
         # Isolated single-pblock anomaly (e.g. only R2):
         # Quorum threshold (< 2) not met; overall main status remains governed by weighted average (HEALTHY)
         worst_region = worst_reg_id

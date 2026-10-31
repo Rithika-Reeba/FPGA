@@ -18,6 +18,8 @@ Tests:
  14. Diagnostic Reasoning Agent (LangGraph) incorporates safety override explanation.
 """
 
+import os
+os.environ["FPGA_BOARD"] = "none"   # tests use the placeholder nominal, never a board calibration
 import sys
 import unittest
 from pathlib import Path
@@ -45,6 +47,15 @@ from dashboard.data_source import (
 from agent.langgraph_agent import evaluate_fpga_health
 
 
+import health_rules as rules
+
+# Every limit below comes from the single source of truth (health_rules.py)
+_NOM = rules.RO_PLACEHOLDER_NOMINAL_MHZ
+_LIM = rules.ro_limits(_NOM)
+WARN_F = round(_LIM["warn_low"], 2)               # warning boundary (MHz)
+CRIT_F = round(_LIM["crit_low"], 2)               # critical boundary (MHz)
+WARN_MID = round((WARN_F + CRIT_F) / 2.0, 1)      # a value inside the warning band
+BELOW_CRIT = round(CRIT_F - 0.2, 1)               # just below the critical boundary
 class TestEngineeringOperatingLimits(unittest.TestCase):
 
     def setUp(self):
@@ -124,7 +135,7 @@ class TestEngineeringOperatingLimits(unittest.TestCase):
     # -------------------------------------------------------------------------
     def test_case_3_temp_warning_48c(self):
         reading = {
-            "Temperature": 48.0,
+            "Temperature": rules.TEMP_WARN_C + 3.0,
             "VCCINT": 1.000,
             "VCCAUX": 1.800,
             "VCCBRAM": 1.000,
@@ -149,7 +160,7 @@ class TestEngineeringOperatingLimits(unittest.TestCase):
     # Test 4: Temperature = 55°C & 125°C -> Critical thermal behavior
     # -------------------------------------------------------------------------
     def test_case_4_temp_critical_55c_and_125c(self):
-        for temp_val in [55.0, 125.0]:
+        for temp_val in [rules.TEMP_CRIT_C + 3.0, 125.0]:
             reading = {
                 "Temperature": temp_val,
                 "VCCINT": 1.000,
@@ -502,7 +513,7 @@ class TestEngineeringOperatingLimits(unittest.TestCase):
         """
         # Warning condition: 48.0°C
         warn_telemetry = {
-            "Temperature": 48.0,
+            "Temperature": rules.TEMP_WARN_C + 3.0,
             "VCCINT": 1.000,
             "VCCAUX": 1.800,
             "VCCBRAM": 1.000,
@@ -522,7 +533,7 @@ class TestEngineeringOperatingLimits(unittest.TestCase):
         self.assertEqual(risk_label, "Low")
 
         # Critical condition: 54.0°C
-        crit_telemetry = dict(warn_telemetry, Temperature=54.0)
+        crit_telemetry = dict(warn_telemetry, Temperature=rules.TEMP_CRIT_C + 3.0)
         crit_assessment = evaluate_engineering_limits(crit_telemetry)
         self.assertTrue(crit_assessment["has_critical"])
         crit_final = determine_final_health("Healthy", 0.95, crit_assessment)
@@ -576,7 +587,7 @@ class TestEngineeringOperatingLimits(unittest.TestCase):
         self.assertEqual(eval_nom.severity, LimitSeverity.NORMAL)
 
         # Mild drift 424 MHz (< 427 MHz operating floor) -> Warning
-        eval_warn = evaluate_single_channel("RO_Frequency", 424.0)
+        eval_warn = evaluate_single_channel("RO_Frequency", WARN_MID)
         self.assertEqual(eval_warn.severity, LimitSeverity.WARNING)
         self.assertIn("degradation", eval_warn.reason.lower())
 
@@ -596,7 +607,7 @@ class TestEngineeringOperatingLimits(unittest.TestCase):
         self.assertGreater(latest["RO_Frequency"], 400.0)
         self.assertLess(latest["RO_Frequency"], 450.0)
         self.assertAlmostEqual(latest["RO_Delay_ns"], round(100.0 / latest["RO_Frequency"], 4), places=3)
-        self.assertEqual(meta["baseline"]["RO_Frequency"], 436.0)
+        self.assertAlmostEqual(meta["baseline"]["RO_Frequency"], rules.global_nominal_mhz(), places=6)
 
         # Mock CSV DataSource
         csv_source = MockCSVDataSource()
@@ -639,8 +650,8 @@ class TestSingleSourceROTimingAndFourRegion(unittest.TestCase):
             "VCCINT": 1.000,
             "VCCAUX": 1.800,
             "VCCBRAM": 1.000,
-            "RO_Frequency": 420.0,
-            "RO_Delay_ns": round(100.0 / 420.0, 4),
+            "RO_Frequency": WARN_MID,
+            "RO_Delay_ns": round(100.0 / WARN_MID, 4),
             "Error_Rate": 0.00000
         }
         assessment = evaluate_engineering_limits(telemetry)
@@ -662,8 +673,8 @@ class TestSingleSourceROTimingAndFourRegion(unittest.TestCase):
             "VCCINT": 1.000,
             "VCCAUX": 1.800,
             "VCCBRAM": 1.000,
-            "RO_Frequency": 412.5,
-            "RO_Delay_ns": round(100.0 / 412.5, 4),
+            "RO_Frequency": CRIT_F + 0.1,
+            "RO_Delay_ns": round(100.0 / (CRIT_F + 0.1), 4),
             "Error_Rate": 0.00000
         }
         assessment = evaluate_engineering_limits(telemetry)
@@ -682,8 +693,8 @@ class TestSingleSourceROTimingAndFourRegion(unittest.TestCase):
             "VCCINT": 1.000,
             "VCCAUX": 1.800,
             "VCCBRAM": 1.000,
-            "RO_Frequency": 411.1,
-            "RO_Delay_ns": round(100.0 / 411.1, 4),
+            "RO_Frequency": BELOW_CRIT,
+            "RO_Delay_ns": round(100.0 / BELOW_CRIT, 4),
             "Error_Rate": 0.00000
         }
         assessment = evaluate_engineering_limits(telemetry)
@@ -694,9 +705,9 @@ class TestSingleSourceROTimingAndFourRegion(unittest.TestCase):
         self.assertEqual(len(assessment["timing_reasons"]), 1)
         self.assertEqual(len(assessment["override_reasons"]), 1)
         self.assertEqual(assessment["primary_channel"], "RO_Frequency")
-        self.assertEqual(assessment["measured_str"], "411.1 MHz")
-        self.assertEqual(assessment["limit_str"], "412.0 MHz")
-        self.assertIn("0.2432 ns", assessment["derived_delay_str"])
+        self.assertEqual(assessment["measured_str"], f"{BELOW_CRIT:.1f} MHz")
+        self.assertEqual(assessment["limit_str"], f"{CRIT_F:.1f} MHz")
+        self.assertIn(f"{100.0 / BELOW_CRIT:.4f} ns", assessment["derived_delay_str"])
         self.assertIn("derived from RO frequency", assessment["derived_delay_str"])
 
         final_res = determine_final_health("Healthy", 0.90, assessment)
@@ -713,8 +724,8 @@ class TestSingleSourceROTimingAndFourRegion(unittest.TestCase):
             "VCCINT": 1.000,
             "VCCAUX": 1.800,
             "VCCBRAM": 1.000,
-            "RO_Frequency": 411.1,
-            "RO_Delay_ns": round(100.0 / 411.1, 4),
+            "RO_Frequency": BELOW_CRIT,
+            "RO_Delay_ns": round(100.0 / BELOW_CRIT, 4),
             "Error_Rate": 0.00000
         }
         assessment = evaluate_engineering_limits(telemetry)
@@ -729,9 +740,9 @@ class TestSingleSourceROTimingAndFourRegion(unittest.TestCase):
         self.assertEqual(panel["ml_prediction"], "WARNING")
         self.assertEqual(panel["ml_confidence_str"], "49.5%")
         self.assertEqual(panel["eng_assessment"], "DEGRADED")
-        self.assertEqual(panel["measured_str"], "411.1 MHz")
-        self.assertEqual(panel["limit_str"], "412.0 MHz")
-        self.assertIn("0.2432 ns", panel["derived_delay_str"])
+        self.assertEqual(panel["measured_str"], f"{BELOW_CRIT:.1f} MHz")
+        self.assertEqual(panel["limit_str"], f"{CRIT_F:.1f} MHz")
+        self.assertIn(f"{100.0 / BELOW_CRIT:.4f} ns", panel["derived_delay_str"])
         self.assertIn("deterministic engineering limit takes precedence", panel["final_decision"])
 
     def test_case_6_mathematical_equivalence_of_boundaries(self):

@@ -47,27 +47,34 @@ Complete hardware RTL design, constraints, synthesis, and programming guide for 
 
 ## 2. Pin Mappings, Switches & Diagnostic LEDs
 
-### Switch Definitions (`sw[3:0]`)
-| Switch | Pin | Function | Default | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| `sw[0]` | `V17` | **Telemetry Format Mode** | `0` (Down) | `0`: JSON Telemetry Stream<br>`1`: `HELLO FPGA` Handshake burst test |
-| `sw[1]` | `V16` | **Ring Oscillator Run/Halt** | `0` (Down) | `0`: Ring Oscillator oscillating continuously<br>`1`: RO halted for debugging |
-| `sw[2]` | `W16` | **Synthetic Fault Injection** | `0` (Down) | `0`: Nominal PRBS-7 operation (Error rate ~0.000010)<br>`1`: Injects bit errors (~0.002000) to demonstrate live Warning/Degraded state transitions |
-| `sw[3]` | `W17` | **Auxiliary Test Flag** | `0` (Down) | Test flag indicator |
-
-### LED Definitions (`led[15:0]`)
-| LED | Pin | Indicator Name | Description |
+### Switch Definitions
+| Switch | Pin | Function | Description |
 | :--- | :--- | :--- | :--- |
-| `led[0]` | `U16` | **Heartbeat** | Blinks at 1 Hz when 100 MHz clock is active |
-| `led[1]` | `E19` | **UART TX Active** | Pulses whenever a byte packet is transmitting over UART |
-| `led[2]` | `U19` | **XADC Conversion** | Pulses when XADC completes a 4-channel DRP cycle |
-| `led[3]` | `V19` | **RO Oscillating** | Lit when Ring Oscillator is running |
-| `led[4]` | `W18` | **Error Injected** | Lit when `sw[2]` is active |
-| `led[5]` | `U15` | **Mode Select** | Lit when `sw[0]` is in Hello Handshake mode |
-| `led[13]`| `N3`  | **Health: HEALTHY** | Lit when Temperature, RO Freq, and Error Rate are nominal |
-| `led[14]`| `P1`  | **Health: WARNING** | Lit when intermediate aging or elevated error rate is detected |
-| `led[15]`| `L1`  | **Health: DEGRADED**| Lit when severe stress or high error rate is detected |
+| `sw[0]` | `V17` | **Telemetry mode** | `0`: telemetry stream (hex line, 2 per second)<br>`1`: `HELLO FPGA` link test |
+| `sw[1]` | `V16` | **Halt ring oscillators** | `0`: oscillators run<br>`1`: all four halted (they then read as dead = Degraded) |
+| `sw[12]`..`sw[15]` | `W2` `U1` `T1` `R2` | **Stress region R1..R4** | `1`: switches on that region's heater LUTs (accelerated thermal stress). Self-limiting: they cut out near 70 C or if VCCINT droops |
+| `sw[2]`..`sw[11]` | | *no function* | |
+| `btnU` | `T18` | **Calibrate** | Captures every region's current count as its baseline (do this while the board is healthy and no stress switch is on) |
+| `btnC` | `U18` | **Reset** | |
 
+### LED Definitions (each LED sits under its switch)
+| LED | Meaning |
+| :--- | :--- |
+| `led[0]`, `led[1]` | `sw[0]` / `sw[1]`: **slow blink = switch off (it has a function), solid = switch on** |
+| `led[2]` | Health: **HEALTHY** |
+| `led[3]` | Health: **WARNING** |
+| `led[4]` | Health: **DEGRADED** (all three off = not calibrated yet) |
+| `led[5]`..`led[11]` | Mirror `sw[5]`..`sw[11]` (those switches have no function) |
+| `led[12]`..`led[15]` | Stress R1..R4: **slow blink = switch off, solid = heaters really running, fast blink = switch on but the safety cut-out is holding the heaters off** |
+
+### Four-digit display
+It rotates every 2 seconds through five pages (no buttons needed):
+
+| Page | Shows | Example |
+| :--- | :--- | :--- |
+| 1..4 | Region R1..R4 ring-oscillator frequency: region digit with a dot, then MHz | `1.431` = R1 at 431 MHz (`3.000` = R3 oscillator stopped) |
+| 5 | Die temperature | `41.6C` |
+Overall health follows the dashboard's rule: a region only changes the overall state when at least two regions are Warning/Degraded (`REGION_QUORUM` in `health_rules.py`); temperature and supply limits always count. All limits live in `health_rules.py`.
 ### Master Clock and Serial Pins
 - **System Clock**: 100.0 MHz on Pin `W5` (`sys_clk_pin`, Period 10.0 ns)
 - **Master Reset**: Pin `U18` (`btnC`, Active High)

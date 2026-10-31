@@ -1,232 +1,298 @@
 `timescale 1ns / 1ps
 //////////////////////////////////////////////////////////////////////////////////
 // Module Name: fpga_health_top
-// Description: Top-Level FPGA Health Monitoring & Telemetry Engine
-// Target:      Digilent Basys 3 (XC7A35T-1CPG236C Artix-7)
-// Architecture: Four-Region Physical Health Monitoring Architecture
-//   - Region 1 (u_region1): Northwest Quadrant (Pblock pblock_R1, Clock Region X0Y2)
-//   - Region 2 (u_region2): Northeast Quadrant (Pblock pblock_R2, Clock Region X1Y2)
-//   - Region 3 (u_region3): Southwest Quadrant (Pblock pblock_R3, Clock Region X0Y0)
-//   - Region 4 (u_region4): Southeast Quadrant (Pblock pblock_R4, Clock Region X1Y0)
-// Interfaces:
-//   - clk: 100.0 MHz on pin W5
-//   - btnC: Master Reset on pin U18
-//   - RsTx: UART Serial Stream (115200 8N1) on pin A18
-//   - sw[3:0]: Hardware configuration switches
-//   - led[15:0]: Diagnostic and health state LEDs
+// Description: Four-region FPGA health monitor for the Digilent Basys 3.
+//
+//   * u_region1..u_region4 each hold a ring-oscillator sensor, edge counter and a
+//     stress generator (fenced into Pblocks R1..R4 by the floorplan script).
+//   * One XADC reader supplies die temperature and VCCINT/VCCAUX/VCCBRAM.
+//   * Raw readings stream over UART as ASCII-hex lines (see packet_formatter).
+//   * Health is judged against a per-region BASELINE captured on the board:
+//     press btnU while the board is in a known-good state to calibrate.
+//       Warning  : region RO count dropped by more than 1/2^WARN_SHIFT of baseline
+//       Degraded : dropped by more than 1/2^DEG_SHIFT, or the oscillator stopped,
+//                  or temperature / supply voltage left their limits.
+//
+// Controls:
+//   btnC      reset                    btnU     capture baseline (calibrate)
+//   sw[0]     1 = HELLO link test      sw[1]    1 = halt all ring oscillators
+//   sw[12..15] stress region R1..R4 (self-limiting on temperature / VCCINT)
+// LEDs (each LED sits under its switch):
+//   led[0], led[1]      sw0 / sw1: slow blink = switch off (has a function), solid = on
+//   led[2] healthy   led[3] warning   led[4] degraded   (all three off = not calibrated yet)
+//   led[11:5]           mirror sw[11:5] (those switches have no function)
+//   led[12..15]         stress switches R1..R4: slow blink = off, solid = heaters running,
+//                       fast blink = switch on but the safety cut-out is holding them off
 //////////////////////////////////////////////////////////////////////////////////
 
-module fpga_health_top (
-    input  wire        clk,        // 100.0 MHz System Clock (Pin W5)
-    input  wire        btnC,       // Active-High Reset Button (Pin U18)
-    input  wire [3:0]  sw,         // Mode and Control Switches
-    output wire [15:0] led,        // Status and Health Indicators
-    output wire        RsTx        // UART TX to USB-UART Bridge (Pin A18)
+module fpga_health_top #(
+    parameter GATE_TICKS    = 1000000,   // 10 ms gate
+    parameter TIMEOUT_TICKS = 3500000,   // 35 ms without a measurement => RO dead
+    parameter STRESS_LUTS   = 512,       // heater LUTs per region
+    parameter TRANSMIT_HZ   = 2,
+    parameter UART_BAUD     = 115200,
+    parameter WARN_SHIFT    = 8,         // 1/256 = 0.39 % drop => warning
+    parameter DEG_SHIFT     = 6,         // 1/64  = 1.56 % drop => degraded
+    parameter REGION_QUORUM = 2,         // regions that must be bad before the overall state changes
+    parameter PAGE_TICKS    = 200000000  // display page time (2 s)
+)(
+    input  wire        clk,
+    input  wire        btnC,
+    input  wire        btnU,
+    input  wire [15:0] sw,
+    output wire [15:0] led,
+    output wire        RsTx,
+    output wire [6:0]  seg,        // seven-segment display (active low)
+    output wire        dp,
+    output wire [3:0]  an
 );
 
-    wire rst;
-    assign rst = btnC;
+    // -------------------------------------------------------------------------
+    // Reset: asynchronous assert, synchronous release
+    // -------------------------------------------------------------------------
+    reg [2:0] rst_pipe = 3'b111;
+    always @(posedge clk or posedge btnC) begin
+        if (btnC) rst_pipe <= 3'b111;
+        else      rst_pipe <= {rst_pipe[1:0], 1'b0};
+    end
+    wire rst = rst_pipe[2];
 
-    // Switch mappings
-    wire sw_mode_select;  // sw[0]: 0=JSON Stream, 1=HELLO Handshake
-    wire sw_ro_enable;    // sw[1]: 1=RO Enabled, 0=RO Halted
-    wire sw_error_inject; // sw[2]: 1=Inject PRBS errors (Fault demo)
-    wire sw_test_flag;    // sw[3]: General test flag
+    // Synchronised inputs
+    reg [1:0] bu_s = 2'b00;
+    reg       bu_d = 1'b0;
+    always @(posedge clk) begin
+        bu_s <= {bu_s[0], btnU};
+        bu_d <= bu_s[1];
+    end
+    wire cal_req = bu_s[1] & ~bu_d;
 
-    assign sw_mode_select  = sw[0];
-    assign sw_ro_enable    = ~sw[1]; // sw[1]=0: RO enabled (default), sw[1]=1: RO halted
-    assign sw_error_inject = sw[2];
-    assign sw_test_flag    = sw[3];
+    reg [3:0] sw_s0 = 4'd0, sw_s1 = 4'd0;      // stress switches
+    reg       ro_halt_s0 = 1'b0, ro_halt_s1 = 1'b0;
+    always @(posedge clk) begin
+        sw_s0      <= sw[15:12];
+        sw_s1      <= sw_s0;
+        ro_halt_s0 <= sw[1];
+        ro_halt_s1 <= ro_halt_s0;
+    end
+    wire ro_enable = ~ro_halt_s1;
 
-    // =========================================================================
-    // 1. 1 Hz Heartbeat Counter
-    // =========================================================================
-    reg [26:0] heartbeat_cnt;
-    reg        heartbeat_led;
-
-    always @(posedge clk or posedge rst) begin
-        if (rst) begin
-            heartbeat_cnt <= 27'd0;
-            heartbeat_led <= 1'b0;
+    // -------------------------------------------------------------------------
+    // Heartbeat
+    // -------------------------------------------------------------------------
+    reg [26:0] hb_cnt = 27'd0;
+    reg        hb_led = 1'b0;
+    always @(posedge clk) begin
+        if (hb_cnt == 27'd49999999) begin
+            hb_cnt <= 27'd0;
+            hb_led <= ~hb_led;
         end else begin
-            if (heartbeat_cnt < 27'd50000000 - 1) begin
-                heartbeat_cnt <= heartbeat_cnt + 27'd1;
-            end else begin
-                heartbeat_cnt <= 27'd0;
-                heartbeat_led <= ~heartbeat_led;
-            end
+            hb_cnt <= hb_cnt + 27'd1;
         end
     end
 
-    // =========================================================================
-    // 2. Four Independent Physical Regional Health Monitors (R1..R4)
-    // =========================================================================
-    wire [15:0] ro_r1_freq_mhz_x10;
-    wire [15:0] ro_r2_freq_mhz_x10;
-    wire [15:0] ro_r3_freq_mhz_x10;
-    wire [15:0] ro_r4_freq_mhz_x10;
-    wire        ro_r1_valid, ro_r2_valid, ro_r3_valid, ro_r4_valid;
-    wire        ro_r1_clk,   ro_r2_clk,   ro_r3_clk,   ro_r4_clk;
+    // -------------------------------------------------------------------------
+    // XADC sensors (raw codes)
+    // -------------------------------------------------------------------------
+    wire [11:0] temp_code, vccint_code, vccaux_code, vccbram_code;
+    wire        sensors_valid, sensors_ready;
 
-    // Region 1: Northwest (Pblock pblock_R1, Clock Region X0Y2)
-    regional_health_monitor u_region1 (
+    xadc_sensor_reader u_xadc_reader (
         .clk(clk),
         .rst(rst),
-        .i_en(sw_ro_enable),
-        .o_freq_mhz_x10(ro_r1_freq_mhz_x10),
-        .o_freq_valid(ro_r1_valid),
-        .o_ro_clk(ro_r1_clk)
+        .o_temp(temp_code),
+        .o_vccint(vccint_code),
+        .o_vccaux(vccaux_code),
+        .o_vccbram(vccbram_code),
+        .o_valid(sensors_valid),
+        .o_ready(sensors_ready)
     );
 
-    // Region 2: Northeast (Pblock pblock_R2, Clock Region X1Y2)
-    regional_health_monitor u_region2 (
-        .clk(clk),
-        .rst(rst),
-        .i_en(sw_ro_enable),
-        .o_freq_mhz_x10(ro_r2_freq_mhz_x10),
-        .o_freq_valid(ro_r2_valid),
-        .o_ro_clk(ro_r2_clk)
-    );
+    // Limits in raw XADC codes (temp: code*503.975/4096-273.15 ; volt: code*3/4096)
+    localparam [11:0] T_WARN      = 12'd2708;   // ~60 degC
+    localparam [11:0] T_DEG       = 12'd2789;   // ~70 degC
+    localparam [11:0] T_STRESS_ON = 12'd2748;   // stress may resume below ~65 degC
 
-    // Region 3: Southwest (Pblock pblock_R3, Clock Region X0Y0)
-    regional_health_monitor u_region3 (
-        .clk(clk),
-        .rst(rst),
-        .i_en(sw_ro_enable),
-        .o_freq_mhz_x10(ro_r3_freq_mhz_x10),
-        .o_freq_valid(ro_r3_valid),
-        .o_ro_clk(ro_r3_clk)
-    );
+    localparam [11:0] VI_WARN_LO = 12'd1297, VI_WARN_HI = 12'd1433;   // 1.0 V +/-5 %
+    localparam [11:0] VI_DEG_LO  = 12'd1229, VI_DEG_HI  = 12'd1501;   // 1.0 V +/-10 %
+    localparam [11:0] VA_WARN_LO = 12'd2335, VA_WARN_HI = 12'd2581;   // 1.8 V +/-5 %
+    localparam [11:0] VA_DEG_LO  = 12'd2212, VA_DEG_HI  = 12'd2704;   // 1.8 V +/-10 %
 
-    // Region 4: Southeast (Pblock pblock_R4, Clock Region X1Y0)
-    regional_health_monitor u_region4 (
-        .clk(clk),
-        .rst(rst),
-        .i_en(sw_ro_enable),
-        .o_freq_mhz_x10(ro_r4_freq_mhz_x10),
-        .o_freq_valid(ro_r4_valid),
-        .o_ro_clk(ro_r4_clk)
-    );
+    // Stress safety interlock with hysteresis
+    reg stress_ok = 1'b0;
+    always @(posedge clk) begin
+        if (rst || !sensors_ready)
+            stress_ok <= 1'b0;
+        else if (temp_code >= T_DEG || vccint_code < VI_DEG_LO)
+            stress_ok <= 1'b0;
+        else if (temp_code <= T_STRESS_ON)
+            stress_ok <= 1'b1;
+    end
+    wire [3:0] stress_en = sw_s1 & {4{stress_ok}};
 
-    // Aggregate average frequency for backward-compatible telemetry
-    wire [17:0] ro_sum = {2'b00, ro_r1_freq_mhz_x10} + {2'b00, ro_r2_freq_mhz_x10} +
-                         {2'b00, ro_r3_freq_mhz_x10} + {2'b00, ro_r4_freq_mhz_x10};
-    wire [15:0] ro_freq_mhz_x10 = ro_sum[17:2]; // Average (sum / 4)
+    // -------------------------------------------------------------------------
+    // Four regional health monitors
+    // -------------------------------------------------------------------------
+    wire [23:0] cnt1, cnt2, cnt3, cnt4;
+    wire [3:0]  alive;
+    wire [3:0]  rvalid;
+    wire [3:0]  ro_clk_obs;
 
-    // Worst-case (minimum) frequency for conservative on-board hardware LED health indication
-    wire [15:0] min_r12 = (ro_r1_freq_mhz_x10 < ro_r2_freq_mhz_x10) ? ro_r1_freq_mhz_x10 : ro_r2_freq_mhz_x10;
-    wire [15:0] min_r34 = (ro_r3_freq_mhz_x10 < ro_r4_freq_mhz_x10) ? ro_r3_freq_mhz_x10 : ro_r4_freq_mhz_x10;
-    wire [15:0] ro_worst_freq_mhz_x10 = (min_r12 < min_r34) ? min_r12 : min_r34;
+    regional_health_monitor #(.GATE_TICKS(GATE_TICKS), .TIMEOUT_TICKS(TIMEOUT_TICKS), .STRESS_LUTS(STRESS_LUTS))
+    u_region1 (.clk(clk), .rst(rst), .i_en(ro_enable), .i_stress_en(stress_en[0]),
+               .o_count(cnt1), .o_valid(rvalid[0]), .o_alive(alive[0]), .o_ro_clk(ro_clk_obs[0]));
 
-    // =========================================================================
-    // 3. XADC On-Chip Temperature & Voltage Sensor Reader
-    // =========================================================================
-    wire [15:0] temp_c_x10;
-    wire [15:0] vccint_mv;
-    wire [15:0] vccaux_mv;
-    wire [15:0] vccbram_mv;
-    wire        sensors_valid;
+    regional_health_monitor #(.GATE_TICKS(GATE_TICKS), .TIMEOUT_TICKS(TIMEOUT_TICKS), .STRESS_LUTS(STRESS_LUTS))
+    u_region2 (.clk(clk), .rst(rst), .i_en(ro_enable), .i_stress_en(stress_en[1]),
+               .o_count(cnt2), .o_valid(rvalid[1]), .o_alive(alive[1]), .o_ro_clk(ro_clk_obs[1]));
 
-    xadc_sensor_reader #(
-        .CLK_FREQ_HZ(100000000)
-    ) u_xadc_reader (
-        .clk(clk),
-        .rst(rst),
-        .o_temp_c_x10(temp_c_x10),
-        .o_vccint_mv(vccint_mv),
-        .o_vccaux_mv(vccaux_mv),
-        .o_vccbram_mv(vccbram_mv),
-        .o_sensors_valid(sensors_valid)
-    );
+    regional_health_monitor #(.GATE_TICKS(GATE_TICKS), .TIMEOUT_TICKS(TIMEOUT_TICKS), .STRESS_LUTS(STRESS_LUTS))
+    u_region3 (.clk(clk), .rst(rst), .i_en(ro_enable), .i_stress_en(stress_en[2]),
+               .o_count(cnt3), .o_valid(rvalid[2]), .o_alive(alive[2]), .o_ro_clk(ro_clk_obs[2]));
 
-    // =========================================================================
-    // 4. PRBS-7 Functional Error Rate Monitor
-    // =========================================================================
-    wire [19:0] error_count_ppm;
-    wire        error_rate_valid;
+    regional_health_monitor #(.GATE_TICKS(GATE_TICKS), .TIMEOUT_TICKS(TIMEOUT_TICKS), .STRESS_LUTS(STRESS_LUTS))
+    u_region4 (.clk(clk), .rst(rst), .i_en(ro_enable), .i_stress_en(stress_en[3]),
+               .o_count(cnt4), .o_valid(rvalid[3]), .o_alive(alive[3]), .o_ro_clk(ro_clk_obs[3]));
 
-    error_rate_monitor #(
-        .WINDOW_BITS(1000000)
-    ) u_err_monitor (
-        .clk(clk),
-        .rst(rst),
-        .i_error_inject(sw_error_inject),
-        .o_error_count_ppm(error_count_ppm),
-        .o_error_rate_valid(error_rate_valid)
-    );
+    // -------------------------------------------------------------------------
+    // Baseline capture (btnU)
+    // -------------------------------------------------------------------------
+    reg [23:0] base1 = 24'd0, base2 = 24'd0, base3 = 24'd0, base4 = 24'd0;
+    reg        calibrated = 1'b0;
 
-    // =========================================================================
-    // 5. UART Transmitter & Four-Region Packet Formatter
-    // =========================================================================
-    wire       uart_tx_valid;
-    wire [7:0] uart_tx_data;
-    wire       uart_busy;
-    wire       tx_active;
+    always @(posedge clk) begin
+        if (rst) begin
+            calibrated <= 1'b0;
+        end else if (cal_req && (&alive) && sensors_ready) begin
+            base1 <= cnt1;
+            base2 <= cnt2;
+            base3 <= cnt3;
+            base4 <= cnt4;
+            calibrated <= 1'b1;
+        end
+    end
+
+    // -------------------------------------------------------------------------
+    // Verdicts: 0 = not calibrated, 1 = healthy, 2 = warning, 3 = degraded
+    // -------------------------------------------------------------------------
+    function [1:0] region_verdict;
+        input        is_alive;
+        input [23:0] cnt;
+        input [23:0] base;
+        input        calib;
+        reg   [23:0] d_warn, d_deg;
+        begin
+            d_warn = base >> WARN_SHIFT;
+            d_deg  = base >> DEG_SHIFT;
+            if (!is_alive)                   region_verdict = 2'd3;
+            else if (!calib)                 region_verdict = 2'd0;
+            else if (cnt < base - d_deg)     region_verdict = 2'd3;
+            else if (cnt < base - d_warn)    region_verdict = 2'd2;
+            else                             region_verdict = 2'd1;
+        end
+    endfunction
+
+    wire [1:0] rv1 = region_verdict(alive[0], cnt1, base1, calibrated);
+    wire [1:0] rv2 = region_verdict(alive[1], cnt2, base2, calibrated);
+    wire [1:0] rv3 = region_verdict(alive[2], cnt3, base3, calibrated);
+    wire [1:0] rv4 = region_verdict(alive[3], cnt4, base4, calibrated);
+
+    wire sens_deg  = (temp_code >= T_DEG)
+                  || (vccint_code  < VI_DEG_LO) || (vccint_code  > VI_DEG_HI)
+                  || (vccaux_code  < VA_DEG_LO) || (vccaux_code  > VA_DEG_HI)
+                  || (vccbram_code < VI_DEG_LO) || (vccbram_code > VI_DEG_HI);
+    wire sens_warn = (temp_code >= T_WARN)
+                  || (vccint_code  < VI_WARN_LO) || (vccint_code  > VI_WARN_HI)
+                  || (vccaux_code  < VA_WARN_LO) || (vccaux_code  > VA_WARN_HI)
+                  || (vccbram_code < VI_WARN_LO) || (vccbram_code > VI_WARN_HI);
+    wire [1:0] sv = !sensors_ready ? 2'd0 : sens_deg ? 2'd3 : sens_warn ? 2'd2 : 2'd1;
+
+    // Region quorum (same policy as the dashboard, health_rules.REGION_QUORUM): the overall
+    // state follows the regions only when at least REGION_QUORUM of them are warning/degraded.
+    // A single bad region is still shown on its own LED (led[11:8]). Sensor limits always apply.
+    wire [2:0] n_deg  = (rv1 == 2'd3) + (rv2 == 2'd3) + (rv3 == 2'd3) + (rv4 == 2'd3);
+    wire [2:0] n_warn = (rv1 == 2'd2) + (rv2 == 2'd2) + (rv3 == 2'd2) + (rv4 == 2'd2);
+    wire       region_quorum = (n_deg + n_warn) >= REGION_QUORUM;
+    wire       region_deg    = region_quorum && (n_deg  != 3'd0);
+    wire       region_warn   = region_quorum && (n_deg  == 3'd0) && (n_warn != 3'd0);
+
+    wire any_uncal = (rv1 == 2'd0) | (rv2 == 2'd0) | (rv3 == 2'd0) | (rv4 == 2'd0) | (sv == 2'd0);
+    wire [1:0] verdict = (region_deg  || sv == 2'd3) ? 2'd3 :
+                         (region_warn || sv == 2'd2) ? 2'd2 :
+                         any_uncal                   ? 2'd0 : 2'd1;
+
+    // -------------------------------------------------------------------------
+    // UART telemetry
+    // -------------------------------------------------------------------------
+    wire       tx_valid, tx_active, uart_busy;
+    wire [7:0] tx_data;
 
     packet_formatter #(
         .CLK_FREQ_HZ(100000000),
-        .TRANSMIT_HZ(1) // 1 Hz telemetry streaming
+        .TRANSMIT_HZ(TRANSMIT_HZ)
     ) u_formatter (
         .clk(clk),
         .rst(rst),
-        .i_mode_select(sw_mode_select),
-        .i_temp_c_x10(temp_c_x10),
-        .i_vccint_mv(vccint_mv),
-        .i_vccaux_mv(vccaux_mv),
-        .i_vccbram_mv(vccbram_mv),
-        .i_ro_r1_freq_mhz_x10(ro_r1_freq_mhz_x10),
-        .i_ro_r2_freq_mhz_x10(ro_r2_freq_mhz_x10),
-        .i_ro_r3_freq_mhz_x10(ro_r3_freq_mhz_x10),
-        .i_ro_r4_freq_mhz_x10(ro_r4_freq_mhz_x10),
-        .i_ro_freq_mhz_x10(ro_freq_mhz_x10),
-        .i_error_count_ppm(error_count_ppm),
+        .i_mode_select(sw[0]),
+        .i_cnt1(cnt1), .i_cnt2(cnt2), .i_cnt3(cnt3), .i_cnt4(cnt4),
+        .i_alive(alive),
+        .i_stress(stress_en),
+        .i_temp(temp_code),
+        .i_vccint(vccint_code),
+        .i_vccaux(vccaux_code),
+        .i_vccbram(vccbram_code),
+        .i_verdict(verdict),
         .i_uart_busy(uart_busy),
-        .o_uart_valid(uart_tx_valid),
-        .o_uart_data(uart_tx_data),
+        .o_uart_valid(tx_valid),
+        .o_uart_data(tx_data),
         .o_tx_active(tx_active)
     );
 
     uart_tx #(
         .CLK_FREQ_HZ(100000000),
-        .BAUD_RATE(115200)
+        .BAUD_RATE(UART_BAUD)
     ) u_uart_tx (
         .clk(clk),
         .rst(rst),
-        .i_valid(uart_tx_valid),
-        .i_data(uart_tx_data),
+        .i_valid(tx_valid),
+        .i_data(tx_data),
         .o_tx(RsTx),
         .o_busy(uart_busy),
         .o_done()
     );
 
-    // =========================================================================
-    // 6. On-Board Diagnostic LEDs
-    // =========================================================================
-    // Local hardware classification rules (Physical 436.0 MHz baseline):
-    // Degraded: Temp >= 52°C OR RO Freq (worst region) < 412 MHz OR Error Rate >= 1000 ppm
-    // Warning:  Temp >= 45°C OR RO Freq (worst region) < 423 MHz OR Error Rate >= 100 ppm
-    // Healthy:  Nominal
-    wire is_degraded;
-    wire is_warning;
-    wire is_healthy;
+    // -------------------------------------------------------------------------
+    // LEDs
+    // -------------------------------------------------------------------------
+    // Four-digit display: R1..R4 frequency ("1.431" = R1 at 431 MHz) then die temperature ("41.6C")
+    display_ctrl #(.PAGE_TICKS(PAGE_TICKS)) u_display (
+        .clk(clk),
+        .rst(rst),
+        .i_cnt1(cnt1), .i_cnt2(cnt2), .i_cnt3(cnt3), .i_cnt4(cnt4),
+        .i_temp_code(temp_code),
+        .o_seg(seg),
+        .o_dp_n(dp),
+        .o_an(an)
+    );
 
-    assign is_degraded = (temp_c_x10 >= 16'd520) || (ro_worst_freq_mhz_x10 < 16'd4120) || (error_count_ppm >= 20'd1000);
-    assign is_warning  = !is_degraded && ((temp_c_x10 >= 16'd450) || (ro_worst_freq_mhz_x10 < 16'd4230) || (error_count_ppm >= 20'd100));
-    assign is_healthy  = !is_degraded && !is_warning;
+    // Each LED sits under its switch on the Basys 3, so the LEDs follow the switches:
+    //   switch WITH a function (sw0, sw1, sw12..15): LED blinks slowly while the switch is
+    //   off ("this switch does something") and is solid once it is on.
+    //   stress switches: solid = heaters really running, fast blink = switch on but the
+    //   safety cut-out (temperature / VCCINT) is holding the heaters off.
+    //   switch WITHOUT a function (sw5..11): LED simply mirrors the switch.
+    // led[2..4] are the health lights (they sit under switches that have no function).
+    wire blink_slow = hb_led;            // about 1 Hz
+    wire blink_fast = hb_cnt[24];        // about 3 Hz
 
-    assign led[0]  = heartbeat_led;       // 1 Hz Heartbeat
-    assign led[1]  = tx_active;           // UART TX Active
-    assign led[2]  = sensors_valid;       // XADC conversion strobe
-    assign led[3]  = ~sw[1];              // RO Running indicator (All 4 regions active)
-    assign led[4]  = sw_error_inject;     // Error Injection Flag
-    assign led[5]  = sw_mode_select;      // 1: Hello test, 0: JSON Telemetry
-    assign led[6]  = sw_test_flag;
-    assign led[7]  = uart_busy;
-
-    assign led[12:8] = 5'b00000;
-
-    assign led[13] = is_healthy;          // Green indicator (Healthy)
-    assign led[14] = is_warning;          // Yellow indicator (Warning)
-    assign led[15] = is_degraded;         // Red indicator (Degraded)
+    assign led[0]     = sw[0]  ? 1'b1 : blink_slow;        // HELLO link-test mode
+    assign led[1]     = sw[1]  ? 1'b1 : blink_slow;        // halt ring oscillators
+    assign led[2]     = (verdict == 2'd1);                 // healthy
+    assign led[3]     = (verdict == 2'd2);                 // warning
+    assign led[4]     = (verdict == 2'd3);                 // degraded
+    assign led[11:5]  = sw[11:5];                          // no function: mirror the switch
+    assign led[12]    = sw[12] ? (stress_en[0] ? 1'b1 : blink_fast) : blink_slow;   // stress R1
+    assign led[13]    = sw[13] ? (stress_en[1] ? 1'b1 : blink_fast) : blink_slow;   // stress R2
+    assign led[14]    = sw[14] ? (stress_en[2] ? 1'b1 : blink_fast) : blink_slow;   // stress R3
+    assign led[15]    = sw[15] ? (stress_en[3] ? 1'b1 : blink_fast) : blink_slow;   // stress R4
 
 endmodule

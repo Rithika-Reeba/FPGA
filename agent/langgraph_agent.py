@@ -21,6 +21,15 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import RO_STAGES
+import health_rules as rules
+
+# Every limit this agent quotes comes from the single source of truth (health_rules.py)
+_RO_NOM = rules.global_nominal_mhz()
+_RO = rules.ro_limits(_RO_NOM)
+_RO_CRIT_LOW, _RO_WARN_LOW, _RO_CRIT_HIGH = _RO["crit_low"], _RO["warn_low"], _RO["crit_high"]
+_RO_CRIT_DROP, _RO_WARN_DROP = rules.RO_CRIT_DROP_PCT, rules.RO_WARN_DROP_PCT
+_TEMP_WARN, _TEMP_CRIT = rules.TEMP_WARN_C, rules.TEMP_CRIT_C
+_VOLT = {rail: rules.volt_limits(rail) for rail in rules.VOLT_NOMINAL_V}
 
 
 # ============================================================
@@ -90,8 +99,8 @@ def analyze_indicators(state: FPGAState) -> FPGAState:
     vccint = state.get("vccint", 1.000)
     vccaux = state.get("vccaux", 1.800)
     vccbram = state.get("vccbram", 1.000)
-    ro_freq = state.get("ro_frequency", 436.0)
-    ro_delay = state.get("ro_delay", 0.2294)
+    ro_freq = state.get("ro_frequency", _RO_NOM)
+    ro_delay = state.get("ro_delay", round(100.0 / _RO_NOM, 4))
     error_rate = state.get("error_rate", 0.0)
     
     ro_freq_shift = state.get("ro_freq_shift_pct", 0.0)
@@ -108,17 +117,17 @@ def analyze_indicators(state: FPGAState) -> FPGAState:
         )
 
     # 1. Ring Oscillator Aging / Timing Degradation Indicator
-    if ro_freq <= 412.0 or ro_freq_shift <= -5.5:
+    if ro_freq <= _RO_CRIT_LOW or ro_freq_shift <= -_RO_CRIT_DROP:
         indicators.append(
             f"Significant Ring Oscillator frequency degradation: {ro_freq:.2f} MHz ({ro_freq_shift:+.2f}% from baseline), "
             f"indicating derived logic stage propagation delay increase ({ro_delay:.4f} ns/stage, {ro_delay_shift:+.2f}%)."
         )
-    elif ro_freq >= 460.0:
+    elif ro_freq >= _RO_CRIT_HIGH:
         indicators.append(
             f"Abnormal Ring Oscillator over-frequency: {ro_freq:.2f} MHz (+{ro_freq_shift:+.2f}% above nominal), "
             "indicating anomalous clock measurement or sub-ambient clock skew."
         )
-    elif ro_freq < 423.0 or ro_freq_shift <= -3.0:
+    elif ro_freq <= _RO_WARN_LOW or ro_freq_shift <= -_RO_WARN_DROP:
         indicators.append(
             f"Moderate Ring Oscillator frequency drop: {ro_freq:.2f} MHz ({ro_freq_shift:+.2f}% from baseline), "
             f"suggesting onset of timing drift ({ro_delay:.4f} ns/stage)."
@@ -129,16 +138,16 @@ def analyze_indicators(state: FPGAState) -> FPGAState:
     # 2. Thermal Footprint & Operating Envelope
     if temp <= 0.0:
         indicators.append(
-            f"Die temperature is abnormal at {temp:.2f} °C (at or below 0°C freezing threshold, expected 20.0–45.0 °C). "
+            f"Die temperature is abnormal at {temp:.2f} °C (at or below 0°C freezing threshold, expected 20.0–{_TEMP_WARN:.1f} °C). "
             "Represents an abnormal operating condition or sensor freeze fault."
         )
-    elif temp >= 52.0:
+    elif temp >= _TEMP_CRIT:
         indicators.append(
             f"Die temperature is critically elevated at {temp:.2f} °C ({temp_shift:+.2f} °C above baseline), "
             f"accelerating thermal wear-out mechanisms (e.g., BTI, Electromigration)."
         )
-    elif temp >= 45.0:
-        indicators.append(f"Die temperature is elevated at {temp:.2f} °C ({temp_shift:+.2f} °C shift, expected 20.0–45.0 °C).")
+    elif temp >= _TEMP_WARN:
+        indicators.append(f"Die temperature is elevated at {temp:.2f} °C ({temp_shift:+.2f} °C shift, expected 20.0–{_TEMP_WARN:.1f} °C).")
     elif temp < 20.0:
         indicators.append(f"Die temperature is cool at {temp:.2f} °C (below nominal operating floor 20.0 °C).")
     else:
@@ -146,20 +155,13 @@ def analyze_indicators(state: FPGAState) -> FPGAState:
 
     # 3. Voltage Rail Stability & Hard Bounds
     voltage_anomalies = []
-    if vccint < 0.920:
-        voltage_anomalies.append(f"VCCINT critical droop ({vccint:.3f}V < 0.920V min)")
-    elif abs(vccint - 1.000) >= 0.050:
-        voltage_anomalies.append(f"VCCINT={vccint:.3f}V (nom 1.000V ±5%)")
-
-    if vccaux < 1.650:
-        voltage_anomalies.append(f"VCCAUX critical droop ({vccaux:.3f}V < 1.650V min)")
-    elif abs(vccaux - 1.800) >= 0.090:
-        voltage_anomalies.append(f"VCCAUX={vccaux:.3f}V (nom 1.800V ±5%)")
-
-    if vccbram < 0.920:
-        voltage_anomalies.append(f"VCCBRAM critical droop ({vccbram:.3f}V < 0.920V min)")
-    elif abs(vccbram - 1.000) >= 0.050:
-        voltage_anomalies.append(f"VCCBRAM={vccbram:.3f}V (nom 1.000V ±5%)")
+    for rail, val in (("VCCINT", vccint), ("VCCAUX", vccaux), ("VCCBRAM", vccbram)):
+        lim = _VOLT[rail]
+        if val < lim["crit_low"]:
+            voltage_anomalies.append(f"{rail} critical droop ({val:.3f}V < {lim['crit_low']:.3f}V min)")
+        elif abs(val - lim["nominal"]) >= lim["nominal"] * rules.VOLT_WARN_FRAC:
+            voltage_anomalies.append(
+                f"{rail}={val:.3f}V (nom {lim['nominal']:.3f}V ±{rules.VOLT_WARN_FRAC * 100:.0f}%)")
 
     if voltage_anomalies:
         indicators.append(f"Power rail voltage violations observed: {', '.join(voltage_anomalies)}.")
@@ -229,11 +231,11 @@ def assess_risk(state: FPGAState) -> FPGAState:
     conf = state.get("confidence", 0.0)
 
     # Risk evaluation hierarchy
-    if health == "Degraded" and (temp > 52.0 or error_rate > 0.0025 or ro_freq_shift < -6.0):
+    if health == "Degraded" and (temp > _TEMP_CRIT or error_rate > 0.0025 or ro_freq_shift < -1.1 * _RO_CRIT_DROP):
         risk = "CRITICAL"
     elif health == "Degraded":
         risk = "HIGH"
-    elif health == "Warning" or temp > 48.0 or ro_freq_shift < -3.5:
+    elif health == "Warning" or temp > _TEMP_WARN or ro_freq_shift < -_RO_WARN_DROP:
         risk = "MODERATE"
     else:
         risk = "LOW"
@@ -388,7 +390,7 @@ def evaluate_fpga_health(telemetry: Dict[str, Any]) -> Dict[str, Any]:
         "vccint": float(telemetry.get("vccint", telemetry.get("VCCINT", 1.000))),
         "vccaux": float(telemetry.get("vccaux", telemetry.get("VCCAUX", 1.800))),
         "vccbram": float(telemetry.get("vccbram", telemetry.get("VCCBRAM", 1.000))),
-        "ro_frequency": float(telemetry.get("ro_frequency", telemetry.get("RO_Frequency", 436.0))),
+        "ro_frequency": float(telemetry.get("ro_frequency", telemetry.get("RO_Frequency", _RO_NOM))),
         "ro_delay": float(telemetry.get("ro_delay", telemetry.get("RO_Delay_ns", 0.2294))),
         "error_rate": float(telemetry.get("error_rate", telemetry.get("Error_Rate", 0.0))),
         "ro_freq_shift_pct": float(telemetry.get("ro_freq_shift_pct", 0.0)),

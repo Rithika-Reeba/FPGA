@@ -2,6 +2,8 @@
 Tests for Four-Region Physical Health Architecture & Regional Map Rendering
 """
 
+import os
+os.environ["FPGA_BOARD"] = "none"   # tests use the placeholder nominal, never a board calibration
 import unittest
 from dashboard.health_map import (
     generate_four_region_data,
@@ -41,6 +43,15 @@ from dashboard.data_source import (
 )
 
 
+import health_rules as rules
+
+# Every limit below comes from the single source of truth (health_rules.py)
+_NOM = rules.RO_PLACEHOLDER_NOMINAL_MHZ
+_LIM = rules.ro_limits(_NOM)
+WARN_F = round(_LIM["warn_low"], 2)               # warning boundary (MHz)
+CRIT_F = round(_LIM["crit_low"], 2)               # critical boundary (MHz)
+WARN_MID = round((WARN_F + CRIT_F) / 2.0, 1)      # a value inside the warning band
+BELOW_CRIT = round(CRIT_F - 0.2, 1)               # just below the critical boundary
 class TestFourRegionHealth(unittest.TestCase):
 
     def test_regional_defaults_and_config_consistency(self):
@@ -128,7 +139,7 @@ class TestFourRegionHealth(unittest.TestCase):
         self.assertNotEqual(r2["state"], "Healthy")
         self.assertEqual(r2["state"], "Degraded")
         self.assertIn("Below critical boundary", r2["indicator"])
-        self.assertEqual(r2["critical_freq"], 412.0)
+        self.assertEqual(r2["critical_freq"], round(CRIT_F, 1))
         self.assertEqual(r2["baseline_freq"], 436.0)
 
     def test_render_four_region_map_html(self):
@@ -209,9 +220,9 @@ class TestFourRegionHealth(unittest.TestCase):
     def test_r2_warning_case(self):
         """A reading violating warning boundary (422.7 MHz) but above critical (411.8 MHz) produces Warning."""
         telemetry = {
-            "RO_Frequency": 420.0,
+            "RO_Frequency": WARN_MID,
             "RO_R1": 436.3,
-            "RO_R2": 420.0,  # Below warning boundary 422.7 MHz, above critical 411.8 MHz
+            "RO_R2": WARN_MID,  # Below warning boundary 422.7 MHz, above critical 411.8 MHz
             "RO_R3": 436.1,
             "RO_R4": 435.9,
             "Temperature": 35.0,
@@ -223,7 +234,7 @@ class TestFourRegionHealth(unittest.TestCase):
         self.assertEqual(r2["state"], "Warning")
         self.assertEqual(r2["severity"], LimitSeverity.WARNING)
         self.assertIn("Below warning boundary", r2["indicator"])
-        self.assertEqual(r2["warning_freq"], 422.9)
+        self.assertEqual(r2["warning_freq"], WARN_F)
 
     def test_critical_precedence_over_small_drift(self):
         """A critical boundary violation unconditionally takes precedence over small baseline drift."""
@@ -310,7 +321,7 @@ class TestFourRegionHealth(unittest.TestCase):
         self.assertEqual(res_h["color"], HEALTH_COLORS["Healthy"])
         self.assertEqual(res_h["bg"], STATUS_BG_COLORS["Healthy"])
 
-        res_w = evaluate_regional_health("R2", 420.0)
+        res_w = evaluate_regional_health("R2", WARN_MID)
         self.assertEqual(res_w["state"], "Warning")
         self.assertEqual(res_w["color"], HEALTH_COLORS["Warning"])
         self.assertEqual(res_w["bg"], STATUS_BG_COLORS["Warning"])
@@ -334,8 +345,8 @@ class TestFourRegionHealth(unittest.TestCase):
             cfg = REGIONAL_CONFIG[r_id]
             self.assertEqual(cfg["nominal_freq"], 436.0, f"{r_id} nominal_freq != 436.0")
             self.assertEqual(cfg["nominal_delay_ns"], 0.2294, f"{r_id} nominal_delay_ns != 0.2294")
-            self.assertEqual(cfg["critical_freq"], 412.0, f"{r_id} critical_freq != 412.0")
-            self.assertEqual(cfg["warning_freq"], 422.9, f"{r_id} warning_freq != 422.9")
+            self.assertEqual(cfg["critical_freq"], CRIT_F, f"{r_id} critical_freq != {CRIT_F}")
+            self.assertEqual(cfg["warning_freq"], WARN_F, f"{r_id} warning_freq != {WARN_F}")
             
             dflt = REGIONAL_DEFAULTS[r_id]
             self.assertEqual(dflt["nominal_freq"], 436.0, f"{r_id} default nominal_freq != 436.0")
@@ -384,7 +395,7 @@ class TestFourRegionHealth(unittest.TestCase):
         # Baselines are all 436.0 MHz
         for r_id in ["R1", "R2", "R3", "R4"]:
             self.assertEqual(by_id[r_id]["baseline_freq"], 436.0)
-            self.assertEqual(by_id[r_id]["critical_boundary"], 412.0)
+            self.assertEqual(by_id[r_id]["critical_boundary"], round(CRIT_F, 1))
 
         # Health statuses: R1, R3, R4 Healthy, R2 Degraded
         self.assertEqual(by_id["R1"]["state"], "Healthy")

@@ -21,7 +21,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from config import RO_STAGES
+from config import RO_STAGES, RO_FREQ_NOMINAL_MHZ
+import health_rules
 from dashboard.config import (
     DEVICE_NAME,
     ARCHITECTURE,
@@ -459,7 +460,7 @@ with st.sidebar:
                 st.session_state.est_vccint = "1.000"
                 st.session_state.est_vccaux = "1.800"
                 st.session_state.est_vccbram = "1.000"
-                st.session_state.est_ro_freq = "436.0"
+                st.session_state.est_ro_freq = f"{RO_FREQ_NOMINAL_MHZ:.1f}"
                 st.session_state.est_err_rate = "0.00001"
                 st.rerun()
         with col_ep2:
@@ -495,7 +496,7 @@ with st.sidebar:
         st.caption("Enter one or more available values. Blank channels default to nominal physical baselines.")
 
         in_temp = st.text_input("Temperature (°C)", value=st.session_state.est_temp, placeholder="e.g. 45.0 (nom: 35.0, 0-125°C)", key="input_temp")
-        in_ro_freq = st.text_input("RO Frequency (MHz)", value=st.session_state.est_ro_freq, placeholder="e.g. 436.0 (nom: 436.0, 50-800MHz)", key="input_ro_freq")
+        in_ro_freq = st.text_input("RO Frequency (MHz)", value=st.session_state.est_ro_freq, placeholder=f"e.g. {RO_FREQ_NOMINAL_MHZ:.1f} (nom: {RO_FREQ_NOMINAL_MHZ:.1f}, 50-800MHz)", key="input_ro_freq")
         in_vccint = st.text_input("VCCINT Core Voltage (V)", value=st.session_state.est_vccint, placeholder="e.g. 1.000 (nom: 1.000, 0.5-1.5V)", key="input_vccint")
         in_vccaux = st.text_input("VCCAUX Aux Voltage (V)", value=st.session_state.est_vccaux, placeholder="e.g. 1.800 (nom: 1.800, 1.0-2.5V)", key="input_vccaux")
         in_vccbram = st.text_input("VCCBRAM BRAM Voltage (V)", value=st.session_state.est_vccbram, placeholder="e.g. 1.000 (nom: 1.000, 0.5-1.5V)", key="input_vccbram")
@@ -672,7 +673,17 @@ try:
         st.error(f"Missing required engineered features: {missing_feats}")
         st.stop()
 
-    X_window = history_df[model_features]
+    # The model was trained on data whose healthy RO frequency is the placeholder nominal. Express
+    # this board's frequencies relative to its own baseline so the model judges drift, not the
+    # absolute frequency, which depends on how Vivado happened to route the oscillators.
+    _k = health_rules.RO_PLACEHOLDER_NOMINAL_MHZ / RO_FREQ_NOMINAL_MHZ
+    X_window = history_df[model_features].copy()
+    for _c in ("RO_Frequency", "RO_Frequency_mean", "RO_Frequency_std", "RO_Frequency_change"):
+        if _c in X_window.columns:
+            X_window[_c] = X_window[_c] * _k
+    for _c in ("RO_Delay_ns", "RO_Delay_change"):
+        if _c in X_window.columns:
+            X_window[_c] = X_window[_c] / _k
     history_df["Predicted_Health"] = model.predict(X_window)
     probs = model.predict_proba(X_window)
     history_df["Confidence"] = probs.max(axis=1)
@@ -697,7 +708,7 @@ except Exception as e:
 
 # Baseline and shift metrics
 baseline = meta.get("baseline", {})
-base_ro_freq = float(baseline.get("RO_Frequency", 436.0))
+base_ro_freq = float(baseline.get("RO_Frequency", RO_FREQ_NOMINAL_MHZ))
 ro_freq_shift = ((curr_ro_freq - base_ro_freq) / base_ro_freq) * 100.0
 
 base_ro_delay = float(baseline.get("RO_Delay_ns", 0.2294))
@@ -860,7 +871,7 @@ trend_tab1, trend_tab2, trend_tab3, trend_tab4, trend_tab5 = st.tabs([
 with trend_tab1:
     col_g1, col_g2 = st.columns(2)
     with col_g1:
-        st.caption("**Ring Oscillator Frequency Trend (MHz)** (Cyan line: Calibrated Overall Frequency, Blue dashed: Baseline 436.0 MHz, Orange/Red dashed: Warning/Critical limits)")
+        st.caption(f"**Ring Oscillator Frequency Trend (MHz)** (Cyan line: Calibrated Overall Frequency, Blue dashed: Baseline {RO_FREQ_NOMINAL_MHZ:.1f} MHz, Orange/Red dashed: Warning/Critical limits)")
         st.altair_chart(create_ro_frequency_chart(history_df, baseline_freq=base_ro_freq, adaptive_scaling=adaptive_zoom, zoom_factor=active_zoom_factor), width="stretch")
     with col_g2:
         st.caption("**Ring Oscillator Delay Trend (Derived RO Stage Delay in ns)** (Magenta line: Calibrated Derived Delay, Purple dashed: Baseline 0.2294 ns, Orange/Red dashed: Warning/Critical limits)")

@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from config import RO_STAGES, calculate_ro_delay_ns
+import health_rules as _hr
 from ml.feature_engineering import create_features
 from communication.uart_receiver import FPGAUARTReceiver
 from dashboard.config import (
@@ -24,6 +25,25 @@ from dashboard.config import (
     validate_regional_baseline,
     LimitSeverity
 )
+
+
+# Nominal RO frequencies come from the single source of truth (health_rules.py)
+_NOM = _hr.global_nominal_mhz()
+_nom = _hr.region_nominal_mhz
+
+
+def _apply_calibration(base: Dict[str, float]) -> Dict[str, float]:
+    """A saved per-board calibration is authoritative for the RO baselines. Without it the
+    baseline stays as given (measured from the first live readings or the placeholder)."""
+    if _hr.load_calibration() is None:
+        return base
+    out = dict(base)
+    out["RO_Frequency"] = _NOM
+    out["RO_Delay_ns"] = round(100.0 / _NOM, 4)
+    for r in ("R1", "R2", "R3", "R4"):
+        out[f"RO_{r}"] = _nom(r)
+        out[f"RO_{r}_Delay_ns"] = round(100.0 / _nom(r), 4)
+    return out
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -107,6 +127,26 @@ class MockCSVDataSource:
             for r in ["R1", "R2", "R3", "R4"]:
                 self.raw_df[f"RO_{r}_Delay_ns"] = self.raw_df[f"RO_{r}"].apply(lambda f: calculate_ro_delay_ns(f, RO_STAGES))
 
+        # The CSV was generated around the placeholder nominal; when a board is calibrated,
+        # rescale it so "healthy" in the replay means healthy for that board.
+        _ref = _hr.RO_PLACEHOLDER_NOMINAL_MHZ
+        if abs(_NOM - _ref) > 1e-9 or any(abs(_nom(r) - _ref) > 1e-9 for r in ["R1", "R2", "R3", "R4"]):
+            self.raw_df["RO_Frequency"] = self.raw_df["RO_Frequency"] * (_NOM / _ref)
+            self.raw_df["RO_Delay_ns"] = self.raw_df["RO_Frequency"].apply(lambda f: calculate_ro_delay_ns(f, RO_STAGES))
+            for r in ["R1", "R2", "R3", "R4"]:
+                self.raw_df[f"RO_{r}"] = (self.raw_df[f"RO_{r}"] * (_nom(r) / _ref)).round(2)
+                self.raw_df[f"RO_{r}_Delay_ns"] = self.raw_df[f"RO_{r}"].apply(lambda f: calculate_ro_delay_ns(f, RO_STAGES))
+
+        # The CSV was generated around the placeholder nominal; when a board is calibrated,
+        # rescale it so "healthy" in the replay means healthy for that board.
+        _ref = _hr.RO_PLACEHOLDER_NOMINAL_MHZ
+        if abs(_NOM - _ref) > 1e-9 or any(abs(_nom(r) - _ref) > 1e-9 for r in ["R1", "R2", "R3", "R4"]):
+            self.raw_df["RO_Frequency"] = self.raw_df["RO_Frequency"] * (_NOM / _ref)
+            self.raw_df["RO_Delay_ns"] = self.raw_df["RO_Frequency"].apply(lambda f: calculate_ro_delay_ns(f, RO_STAGES))
+            for r in ["R1", "R2", "R3", "R4"]:
+                self.raw_df[f"RO_{r}"] = (self.raw_df[f"RO_{r}"] * (_nom(r) / _ref)).round(2)
+                self.raw_df[f"RO_{r}_Delay_ns"] = self.raw_df[f"RO_{r}"].apply(lambda f: calculate_ro_delay_ns(f, RO_STAGES))
+
         # Baseline from early healthy samples (first 50 samples average)
         early_window = self.raw_df.head(50)
         base_cols = ["Temperature", "VCCINT", "VCCAUX", "VCCBRAM", "RO_Frequency", "RO_Delay_ns", "Error_Rate"]
@@ -186,15 +226,15 @@ class LiveSimulationDataSource:
             "VCCINT": 1.000,
             "VCCAUX": 1.800,
             "VCCBRAM": 1.000,
-            "RO_Frequency": 436.0,
+            "RO_Frequency": _NOM,
             "RO_Delay_ns": 0.2294,
-            "RO_R1": 436.0,
+            "RO_R1": _nom("R1"),
             "RO_R1_Delay_ns": 0.2294,
-            "RO_R2": 436.0,
+            "RO_R2": _nom("R2"),
             "RO_R2_Delay_ns": 0.2294,
-            "RO_R3": 436.0,
+            "RO_R3": _nom("R3"),
             "RO_R3_Delay_ns": 0.2294,
-            "RO_R4": 436.0,
+            "RO_R4": _nom("R4"),
             "RO_R4_Delay_ns": 0.2294,
             "Error_Rate": 0.00001
         }
@@ -216,7 +256,7 @@ class LiveSimulationDataSource:
         vccint = 1.000 - 0.010 * deg + np.random.normal(0, 0.0008)
         vccaux = 1.800 - 0.010 * deg + np.random.normal(0, 0.0008)
         vccbram = 1.000 - 0.008 * deg + np.random.normal(0, 0.0008)
-        ro_freq = 436.0 - 25.0 * deg + np.random.normal(0, 0.6)
+        ro_freq = _NOM * (1.0 - 0.0573 * deg) + np.random.normal(0, 0.6)
         ro_delay = calculate_ro_delay_ns(ro_freq, stages=RO_STAGES)
         
         # Regional RO drift simulation
@@ -373,25 +413,25 @@ class LiveUARTDataSource:
                     cand_eng = evaluate_engineering_limits(cand_base)
                     if not is_candidate_healthy or cand_eng.has_hard_violations or cand_eng.max_severity != LimitSeverity.NORMAL:
                         # Reject candidate; fall back to documented factory nominals
-                        self.baseline_sample = {
+                        self.baseline_sample = _apply_calibration({
                             "Temperature": 35.0,
                             "VCCINT": 1.000,
                             "VCCAUX": 1.800,
                             "VCCBRAM": 1.000,
-                            "RO_Frequency": 436.0,
+                            "RO_Frequency": _NOM,
                             "RO_Delay_ns": 0.2294,
-                            "RO_R1": 436.0,
+                            "RO_R1": _nom("R1"),
                             "RO_R1_Delay_ns": 0.2294,
-                            "RO_R2": 436.0,
+                            "RO_R2": _nom("R2"),
                             "RO_R2_Delay_ns": 0.2294,
-                            "RO_R3": 436.0,
+                            "RO_R3": _nom("R3"),
                             "RO_R3_Delay_ns": 0.2294,
-                            "RO_R4": 436.0,
+                            "RO_R4": _nom("R4"),
                             "RO_R4_Delay_ns": 0.2294,
                             "Error_Rate": 0.000010
-                        }
+                        })
                     else:
-                        self.baseline_sample = cand_base
+                        self.baseline_sample = _apply_calibration(cand_base)
         return last_packet
 
     def get_data(self, window_size: int = 150, sample_idx: Optional[int] = None) -> Tuple[pd.DataFrame, pd.Series, Dict[str, Any]]:
@@ -402,15 +442,15 @@ class LiveUARTDataSource:
                 "VCCINT": 1.000,
                 "VCCAUX": 1.800,
                 "VCCBRAM": 1.000,
-                "RO_Frequency": 436.0,
+                "RO_Frequency": _NOM,
                 "RO_Delay_ns": 0.2294,
-                "RO_R1": 436.0,
+                "RO_R1": _nom("R1"),
                 "RO_R1_Delay_ns": 0.2294,
-                "RO_R2": 436.0,
+                "RO_R2": _nom("R2"),
                 "RO_R2_Delay_ns": 0.2294,
-                "RO_R3": 436.0,
+                "RO_R3": _nom("R3"),
                 "RO_R3_Delay_ns": 0.2294,
-                "RO_R4": 436.0,
+                "RO_R4": _nom("R4"),
                 "RO_R4_Delay_ns": 0.2294,
                 "Error_Rate": 0.000010
             }]
@@ -478,15 +518,15 @@ class LiveUARTDataSource:
                 "VCCINT": 1.000,
                 "VCCAUX": 1.800,
                 "VCCBRAM": 1.000,
-                "RO_Frequency": 436.0,
+                "RO_Frequency": _NOM,
                 "RO_Delay_ns": 0.2294,
-                "RO_R1": 436.0,
+                "RO_R1": _nom("R1"),
                 "RO_R1_Delay_ns": 0.2294,
-                "RO_R2": 436.0,
+                "RO_R2": _nom("R2"),
                 "RO_R2_Delay_ns": 0.2294,
-                "RO_R3": 436.0,
+                "RO_R3": _nom("R3"),
                 "RO_R3_Delay_ns": 0.2294,
-                "RO_R4": 436.0,
+                "RO_R4": _nom("R4"),
                 "RO_R4_Delay_ns": 0.2294,
                 "Error_Rate": 0.000010
             }
@@ -510,15 +550,15 @@ class EstimatedDataSource:
         "VCCINT": 1.000,
         "VCCAUX": 1.800,
         "VCCBRAM": 1.000,
-        "RO_Frequency": 436.0,
+        "RO_Frequency": _NOM,
         "RO_Delay_ns": 0.2294,
-        "RO_R1": 436.0,
+        "RO_R1": _nom("R1"),
         "RO_R1_Delay_ns": 0.2294,
-        "RO_R2": 436.0,
+        "RO_R2": _nom("R2"),
         "RO_R2_Delay_ns": 0.2294,
-        "RO_R3": 436.0,
+        "RO_R3": _nom("R3"),
         "RO_R3_Delay_ns": 0.2294,
-        "RO_R4": 436.0,
+        "RO_R4": _nom("R4"),
         "RO_R4_Delay_ns": 0.2294,
         "Error_Rate": 0.00001
     }

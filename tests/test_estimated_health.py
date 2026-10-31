@@ -17,6 +17,8 @@ Verifies:
 13. End-to-end ML classification and Diagnostic Agent integration.
 """
 
+import os
+os.environ["FPGA_BOARD"] = "none"   # tests use the placeholder nominal, never a board calibration
 import sys
 import unittest
 from pathlib import Path

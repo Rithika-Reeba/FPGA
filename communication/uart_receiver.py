@@ -26,6 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import RO_STAGES, calculate_ro_delay_ns
+from hardware.host.health_reader import parse_line as parse_hex_line
 
 try:
     import serial
@@ -205,6 +206,13 @@ class FPGAUARTReceiver:
 
                 if incoming:
                     text = incoming.decode("utf-8", errors="ignore")
+                    if "R1=" in text and "T=" in text and "H=" in text:
+                        return {
+                            "status": "FPGA_STREAMING",
+                            "message": "🟢 Valid FPGA hex telemetry actively streaming!",
+                            "telemetry": True,
+                            "raw_sample": text.strip()[:100]
+                        }
                     if "{" in text and ("Temperature" in text or "RO_Frequency" in text or "VCCINT" in text):
                         return {
                             "status": "FPGA_STREAMING",
@@ -571,6 +579,11 @@ class FPGAUARTReceiver:
 
     def _parse_raw_line(self, line: str) -> Optional[Dict[str, Any]]:
         """Parse raw UART line into structured sensor dictionary."""
+        # Case 0: current board firmware - one ASCII-hex line of raw counts / ADC codes
+        #   R1=cccccc,R2=...,R3=...,R4=...,T=ttt,I=iii,A=aaa,B=bbb,F=f,S=s,H=h
+        if line.lstrip().startswith("R1="):
+            return self._hex_packet_to_dict(line)
+
         # Case A: JSON Telemetry Packet (extract matching { ... })
         start_idx = line.find("{")
         end_idx = line.rfind("}")
@@ -626,6 +639,53 @@ class FPGAUARTReceiver:
                 return self._sanitize_packet(data)
 
         return None
+
+    def _hex_packet_to_dict(self, line: str) -> Optional[Dict[str, Any]]:
+        """
+        Convert a raw hex packet into the dashboard's telemetry dictionary.
+
+        Unlike the legacy sanitiser, a stopped ring oscillator is NOT dropped: it is passed
+        on with 0 MHz so the engineering limits report it as Degraded instead of the
+        dashboard silently showing "no telemetry". The board does not measure a functional
+        error rate, so Error_Rate is 0.0 and marked NOT_AVAILABLE.
+        """
+        p = parse_hex_line(line)
+        if p is None:
+            return None
+
+        regions = ("R1", "R2", "R3", "R4")
+        freqs = {r: (p["freq_mhz"][r] if p["alive"][r] else 0.0) for r in regions}
+        running = [f for f in freqs.values() if f > 0.0]
+        ro_freq = sum(running) / len(running) if running else 0.0
+
+        temp, vccint, vccaux, vccbram = p["temp_c"], p["VCCINT"], p["VCCAUX"], p["VCCBRAM"]
+        if not (0.0 <= temp <= 125.0 and 0.5 <= vccint <= 1.5 and 1.0 <= vccaux <= 2.5 and 0.5 <= vccbram <= 1.5):
+            return None
+        if any(f > 800.0 for f in freqs.values()):
+            return None
+
+        out: Dict[str, Any] = {
+            "Timestamp": time.time(),
+            "Temperature": round(temp, 2),
+            "VCCINT": round(vccint, 4),
+            "VCCAUX": round(vccaux, 4),
+            "VCCBRAM": round(vccbram, 4),
+            "RO_Frequency": round(ro_freq, 2),
+            "RO_Delay_ns": round(calculate_ro_delay_ns(ro_freq, stages=RO_STAGES), 4),
+            "Error_Rate": 0.0,
+        }
+        provenance = {
+            "Temperature": "MEASURED", "VCCINT": "MEASURED", "VCCAUX": "MEASURED",
+            "VCCBRAM": "MEASURED", "RO_Frequency": "MEASURED", "RO_Delay_ns": "DERIVED",
+            "Error_Rate": "NOT_AVAILABLE",
+        }
+        for r in regions:
+            out[f"RO_{r}"] = round(freqs[r], 2)
+            out[f"RO_{r}_Delay_ns"] = round(calculate_ro_delay_ns(freqs[r], stages=RO_STAGES), 4)
+            provenance[f"RO_{r}"] = "MEASURED"
+            provenance[f"RO_{r}_Delay_ns"] = "DERIVED"
+        out["Provenance"] = provenance
+        return out
 
     def _sanitize_packet(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """

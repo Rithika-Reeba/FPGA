@@ -39,15 +39,6 @@ if {$target_device eq ""} {
 current_hw_device $target_device
 refresh_hw_device -update_hw_probes false [current_hw_device]
 
-# Automatically backup existing device program if not already backed up
-set backup_file [file normalize "$proj_root/backup_original.bin"]
-if {![file exists $backup_file]} {
-    puts "--> Backing up current FPGA program to: $backup_file..."
-    catch { readback_hw_device -bin_file $backup_file -force [current_hw_device] }
-} else {
-    puts "--> Existing backup found at: $backup_file"
-}
-
 # Set bitstream file property and program
 set_property PROGRAM.FILE $bitstream [current_hw_device]
 puts "--> Programming device: [current_hw_device]..."

@@ -1,47 +1,53 @@
 `timescale 1ns / 1ps
 //////////////////////////////////////////////////////////////////////////////////
 // Module Name: regional_health_monitor
-// Description: Independent Physical Regional Health Monitor for Basys 3 Artix-7
-// Architecture: Integrates a 5-Stage Ring Oscillator (RO) and a 10 ms Gated
-//               Reciprocal Frequency Counter within a physically isolated region.
-// Formula:     tau = 1 / (2 * N * f_Hz) = 100 / f_MHz [ns/stage for N=5]
-// Pblock:      Constrained to one of four physical device quadrants (R1..R4)
+// Description: Everything that lives inside one Pblock region (R1..R4):
+//              a ring-oscillator delay sensor, its gated edge counter and a
+//              switchable stress generator. Instantiated four times in the top
+//              level as u_region1..u_region4 so the floorplan script can fence
+//              each copy into its own physical region.
 //////////////////////////////////////////////////////////////////////////////////
 
 module regional_health_monitor #(
-    parameter REF_CLK_HZ = 100000000, // 100.0 MHz reference clock
-    parameter GATE_TICKS = 1000000    // 10.0 ms measurement gate window
+    parameter GATE_TICKS    = 1000000,
+    parameter TIMEOUT_TICKS = 3500000,
+    parameter STRESS_LUTS   = 512
 )(
-    input  wire        clk,            // 100 MHz System Reference Clock
-    input  wire        rst,            // System Reset (Active-High)
-    input  wire        i_en,           // Regional Monitor Enable (1=Oscillate, 0=Halt)
-    output wire [15:0] o_freq_mhz_x10, // Measured Frequency in 0.1 MHz units (4360 = 436.0 MHz)
-    output wire        o_freq_valid,   // Pulse when fresh measurement is latched
-    output wire        o_ro_clk        // Asynchronous RO clock output (for observability)
+    input  wire        clk,
+    input  wire        rst,
+    input  wire        i_en,         // ring oscillator enable
+    input  wire        i_stress_en,  // stress generator enable (already safety-gated)
+    output wire [23:0] o_count,      // raw RO edge count per gate window
+    output wire        o_valid,
+    output wire        o_alive,
+    output wire        o_ro_clk
 );
 
-    // Internal RO clock signal
-    wire ro_clk_internal;
+    wire ro_clk;
 
-    // 1. Dedicated 5-Stage Ring Oscillator
-    // DONT_TOUCH and KEEP attributes inside ring_oscillator preserve the loop
     ring_oscillator u_ring_osc (
         .i_en(i_en),
-        .o_ro_clk(ro_clk_internal)
+        .o_ro_clk(ro_clk)
     );
 
-    // 2. Dedicated Reciprocal Frequency Counter with 2-Stage CDC
     frequency_counter #(
-        .REF_CLK_HZ(REF_CLK_HZ),
-        .GATE_TICKS(GATE_TICKS)
+        .GATE_TICKS(GATE_TICKS),
+        .TIMEOUT_TICKS(TIMEOUT_TICKS)
     ) u_freq_counter (
         .clk(clk),
         .rst(rst),
-        .i_ro_clk(ro_clk_internal),
-        .o_freq_mhz_x10(o_freq_mhz_x10),
-        .o_freq_valid(o_freq_valid)
+        .i_ro_clk(ro_clk),
+        .o_count(o_count),
+        .o_valid(o_valid),
+        .o_alive(o_alive)
     );
 
-    assign o_ro_clk = ro_clk_internal;
+    stress_generator #(
+        .N(STRESS_LUTS)
+    ) u_stress (
+        .i_en(i_stress_en)
+    );
+
+    assign o_ro_clk = ro_clk;
 
 endmodule

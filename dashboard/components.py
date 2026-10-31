@@ -17,6 +17,7 @@ from dashboard.config import (
     STATUS_BG_COLORS,
     DEVICE_NAME,
     RO_STAGES,
+    RO_FREQ_NOMINAL_MHZ,
     evaluate_single_channel,
     LimitSeverity,
     get_error_risk_label
@@ -144,7 +145,7 @@ def render_measurements_grid(latest: pd.Series, baseline: Dict[str, float], samp
     vccbram_base = baseline.get("VCCBRAM", 1.000)
     vccbram_delta = latest["VCCBRAM"] - vccbram_base
 
-    ro_freq_base = baseline.get("RO_Frequency", 436.0)
+    ro_freq_base = baseline.get("RO_Frequency", RO_FREQ_NOMINAL_MHZ)
     ro_freq_delta = latest["RO_Frequency"] - ro_freq_base
 
     ro_delay_base = baseline.get("RO_Delay_ns", 0.2294)
@@ -245,7 +246,7 @@ def render_ring_oscillator_section(latest: pd.Series, baseline: Dict[str, float]
     Calculates Frequency Shift (%) and Delay Shift (%), and presents the mathematical model.
     """
     curr_freq = latest["RO_Frequency"]
-    base_freq = baseline.get("RO_Frequency", 436.0)
+    base_freq = baseline.get("RO_Frequency", RO_FREQ_NOMINAL_MHZ)
     freq_shift_pct = ((curr_freq - base_freq) / base_freq) * 100.0
 
     curr_delay = latest["RO_Delay_ns"]
@@ -310,7 +311,7 @@ def render_baseline_comparison(latest: pd.Series, baseline: Dict[str, float]):
 
     # RO Frequency
     f_curr = latest["RO_Frequency"]
-    f_base = baseline.get("RO_Frequency", 436.0)
+    f_base = baseline.get("RO_Frequency", RO_FREQ_NOMINAL_MHZ)
     f_shift = ((f_curr - f_base) / f_base) * 100.0
     rows.append({
         "Sensor Channel": "Ring Oscillator Frequency",

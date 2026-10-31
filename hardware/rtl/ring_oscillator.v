@@ -1,35 +1,33 @@
 `timescale 1ns / 1ps
 //////////////////////////////////////////////////////////////////////////////////
 // Module Name: ring_oscillator
-// Description: 5-Stage Ring Oscillator (RO) Sensor for Silicon Aging & Delay Monitoring
-// Target:      Digilent Basys 3 (XC7A35T-1CPG236C Artix-7)
-// Stages:      N = 5 inverting logic elements
-// Formula:     tau = 1 / (2 * N * f_Hz) = 1000 / (2 * 5 * f_MHz) [ns/stage]
-// Notes:       Uses DONT_TOUCH / KEEP / S synthesis attributes to prevent Vivado
-//              logic optimization and preserve the physical combinatorial feedback loop.
+// Description: 5-stage ring oscillator (N = 5 inverting elements) used as an
+//              on-chip delay / aging sensor.
+// Formula:     tau = 1 / (2 * N * f)   [per-stage delay]
+// Notes:       DONT_TOUCH / KEEP on every node keeps Vivado from optimising the
+//              intentional combinatorial loop. Under SIMULATION the stages get a
+//              transport delay (STAGE_DELAY_NS) so the loop oscillates in xsim.
 //////////////////////////////////////////////////////////////////////////////////
 
-module ring_oscillator (
-    input  wire i_en,      // Enable oscillation (Active High)
-    output wire o_ro_clk   // Asynchronous ring oscillator clock output
+module ring_oscillator #(
+    parameter real STAGE_DELAY_NS = 0.23   // simulation only
+)(
+    input  wire i_en,      // 1 = oscillate, 0 = output held high
+    output wire o_ro_clk
 );
 
-    // Internal node wires with synthesis protection attributes
     (* DONT_TOUCH = "TRUE", KEEP = "TRUE", S = "TRUE" *) wire stage0_out;
     (* DONT_TOUCH = "TRUE", KEEP = "TRUE", S = "TRUE" *) wire stage1_out;
     (* DONT_TOUCH = "TRUE", KEEP = "TRUE", S = "TRUE" *) wire stage2_out;
     (* DONT_TOUCH = "TRUE", KEEP = "TRUE", S = "TRUE" *) wire stage3_out;
     (* DONT_TOUCH = "TRUE", KEEP = "TRUE", S = "TRUE" *) wire stage4_out;
 
-    // Stage 0: Gated Inverting Element (NAND / Gated Inverter)
-    // When i_en is high, stage0_out = ~stage4_out
-    // When i_en is low, stage0_out = 1'b1 (halts oscillation)
 `ifdef SIMULATION
-    assign #0.23 stage0_out = ~(stage4_out & i_en);
-    assign #0.23 stage1_out = ~stage0_out;
-    assign #0.23 stage2_out = ~stage1_out;
-    assign #0.23 stage3_out = ~stage2_out;
-    assign #0.23 stage4_out = ~stage3_out;
+    assign #(STAGE_DELAY_NS) stage0_out = ~(stage4_out & i_en);
+    assign #(STAGE_DELAY_NS) stage1_out = ~stage0_out;
+    assign #(STAGE_DELAY_NS) stage2_out = ~stage1_out;
+    assign #(STAGE_DELAY_NS) stage3_out = ~stage2_out;
+    assign #(STAGE_DELAY_NS) stage4_out = ~stage3_out;
 `else
     assign stage0_out = ~(stage4_out & i_en);
     assign stage1_out = ~stage0_out;
@@ -38,7 +36,6 @@ module ring_oscillator (
     assign stage4_out = ~stage3_out;
 `endif
 
-    // Output tapped from stage4
     assign o_ro_clk = stage4_out;
 
 endmodule

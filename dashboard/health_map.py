@@ -23,6 +23,10 @@ from dashboard.config import (
     STATUS_BG_COLORS,
     REGIONAL_CONFIG,
     DEFAULT_REGIONAL_WEIGHTS,
+    REGION_QUORUM,
+    RO_FREQ_NOMINAL_MHZ,
+    RO_FREQ_WARNING_LOW_MHZ,
+    RO_FREQ_CRITICAL_LOW_MHZ,
     evaluate_regional_health,
     validate_regional_baseline,
     validate_regional_weights,
@@ -73,6 +77,12 @@ REGIONAL_DEFAULTS = {
     }
 }
 
+# The literals above are placeholders only: the real nominals come from the single
+# source of truth (health_rules.py via REGIONAL_CONFIG).
+for _rid, _meta in REGIONAL_DEFAULTS.items():
+    _meta["nominal_freq"] = REGIONAL_CONFIG[_rid]["nominal_freq"]
+    _meta["nominal_delay_ns"] = REGIONAL_CONFIG[_rid]["nominal_delay_ns"]
+
 
 def calculate_aggregate_risk_score(
     health_pred: str,
@@ -112,7 +122,7 @@ def generate_four_region_data(
     Uses the unified evaluate_regional_health() engine to ensure consistent safety limits.
     """
     baselines = regional_baselines or {}
-    global_ro_freq = telemetry.get("RO_Frequency", 436.0)
+    global_ro_freq = telemetry.get("RO_Frequency", RO_FREQ_NOMINAL_MHZ)
 
     regions = []
     region_keys = ["R1", "R2", "R3", "R4"]
@@ -173,23 +183,33 @@ def render_four_region_map_html(
     weights_display_parts = [f"{r}:{w:.2f}" for r, w in sorted(weights_used.items())]
     weights_str = " | ".join(weights_display_parts)
 
-    crit_count = sum(1 for r in regions if r.get("current_freq", 999.0) <= 412.0)
-    warn_count = sum(1 for r in regions if 412.0 < r.get("current_freq", 999.0) <= 422.9)
+    # Each region is judged against its own boundaries (single source of truth)
+    def _crit(r):
+        return r.get("critical_freq", RO_FREQ_CRITICAL_LOW_MHZ)
+
+    def _warn(r):
+        return r.get("warning_freq", RO_FREQ_WARNING_LOW_MHZ)
+
+    crit_count = sum(1 for r in regions if r.get("current_freq", 999.0) <= _crit(r))
+    warn_count = sum(1 for r in regions if _crit(r) < r.get("current_freq", 999.0) <= _warn(r))
     degrading_total = crit_count + warn_count
 
+    worst_r = next((r for r in regions if r.get("id") == worst_id), {})
+    crit_b, warn_b = _crit(worst_r), _warn(worst_r)
+
     # Determine worst region color and safety note with Quorum policy
-    if worst_freq is not None and worst_freq <= 412.0:
+    if worst_freq is not None and worst_freq <= crit_b:
         worst_color = HEALTH_COLORS["Degraded"]
-        if degrading_total >= 2:
-            worst_note = f"Multi-pblock degradation (&ge; 2 pblocks; overall Degraded)"
+        if degrading_total >= REGION_QUORUM:
+            worst_note = f"Multi-pblock degradation (&ge; {REGION_QUORUM} pblocks; overall Degraded)"
         else:
-            worst_note = f"Isolated pblock critical in {worst_id} (&le; 412.0 MHz; Quorum: &ge; 2 for overall)"
-    elif worst_freq is not None and worst_freq <= 422.9:
+            worst_note = f"Isolated pblock critical in {worst_id} (&le; {crit_b:.1f} MHz; Quorum: &ge; {REGION_QUORUM} for overall)"
+    elif worst_freq is not None and worst_freq <= warn_b:
         worst_color = HEALTH_COLORS["Warning"]
-        if degrading_total >= 2:
-            worst_note = f"Multi-pblock warning drift (&ge; 2 pblocks; overall Warning)"
+        if degrading_total >= REGION_QUORUM:
+            worst_note = f"Multi-pblock warning drift (&ge; {REGION_QUORUM} pblocks; overall Warning)"
         else:
-            worst_note = f"Isolated pblock warning in {worst_id} (&le; 422.9 MHz; Quorum: &ge; 2 for overall)"
+            worst_note = f"Isolated pblock warning in {worst_id} (&le; {warn_b:.1f} MHz; Quorum: &ge; {REGION_QUORUM} for overall)"
     elif worst_freq is not None:
         worst_color = HEALTH_COLORS["Healthy"]
         worst_note = f"Healthy operating envelope ({worst_id})"

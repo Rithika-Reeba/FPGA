@@ -16,21 +16,25 @@ ARCHITECTURE = "28nm HKMG (High-K Metal Gate)"
 # Number of inverter stages in the on-chip Ring Oscillator
 RO_STAGES = 5
 
-# Calibrated physical baseline for Digilent Basys 3 (5-stage RO @ ~229 ps/stage)
-RO_NOMINAL_MHZ = 436.0
-RO_NOMINAL_DELAY_NS = 0.2294  # 1000.0 / (2 * 5 * 436.0) = 0.2294 ns (229.4 ps)
-
 # ============================================================
-# Canonical Ring Oscillator Timing Thresholds (Single Source of Truth)
+# Canonical Ring Oscillator Timing Thresholds
+# The numbers live in health_rules.py (single source of truth). The nominal is the
+# calibrated board baseline (FPGA_BOARD env var) or the 436.0 MHz placeholder.
 # Frequency is the primary physical measurement; Delay is deterministically derived.
 # ============================================================
-RO_FREQ_NOMINAL_MHZ: float = 436.0
-RO_FREQ_OPERATING_MIN_MHZ: float = 427.0  # -2.0% healthy envelope
-RO_FREQ_OPERATING_MAX_MHZ: float = 445.0  # +2.0% healthy envelope
-RO_FREQ_WARNING_LOW_MHZ: float = 423.0    # -3.0% (Moderate timing degradation / thermal load)
-RO_FREQ_WARNING_HIGH_MHZ: float = 447.0   # +2.5%
-RO_FREQ_CRITICAL_LOW_MHZ: float = 412.0   # -5.5% (Hard engineering limit: severe NBTI / transistor aging)
-RO_FREQ_CRITICAL_HIGH_MHZ: float = 460.0  # +5.5% (Abnormal clock fault)
+import health_rules as _rules
+
+_ro = _rules.ro_limits(_rules.global_nominal_mhz())
+RO_NOMINAL_MHZ = _ro["nominal"]
+RO_NOMINAL_DELAY_NS = round(100.0 / RO_NOMINAL_MHZ, 4)
+
+RO_FREQ_NOMINAL_MHZ: float = _ro["nominal"]
+RO_FREQ_OPERATING_MIN_MHZ: float = _ro["warn_low"]   # healthy envelope = between the warning bounds
+RO_FREQ_OPERATING_MAX_MHZ: float = _ro["warn_high"]
+RO_FREQ_WARNING_LOW_MHZ: float = _ro["warn_low"]
+RO_FREQ_WARNING_HIGH_MHZ: float = _ro["warn_high"]
+RO_FREQ_CRITICAL_LOW_MHZ: float = _ro["crit_low"]
+RO_FREQ_CRITICAL_HIGH_MHZ: float = _ro["crit_high"]
 
 # Derived Delay Thresholds: tau = 1000.0 / (2 * N * f_MHz) = 100.0 / f_MHz for N=5 stages
 # Inverses: Higher frequency = Lower delay; Lower frequency = Higher delay
