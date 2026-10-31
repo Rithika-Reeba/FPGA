@@ -8,7 +8,7 @@ XADC raw codes in the RTL are rounded integers, so a +/-1 code tolerance (about
 """
 
 import os
-os.environ["FPGA_BOARD"] = "none"   # tests use the placeholder nominal, never a board calibration
+os.environ["FPGA_CALIBRATION"] = "none"   # tests use the placeholder nominal, never a board calibration
 import math
 import re
 import unittest
@@ -92,7 +92,7 @@ class TestSingleSourceOfTruth(unittest.TestCase):
             f"sys.path.insert(0, r'{root / 'dashboard'}'); import config; "
             "print(json.dumps([config.RO_FREQ_NOMINAL_MHZ, config.RO_FREQ_WARNING_LOW_MHZ, config.RO_FREQ_CRITICAL_LOW_MHZ]))"
         )
-        env = dict(os.environ, FPGA_BOARD="none")
+        env = dict(os.environ, FPGA_CALIBRATION="none")
         out = subprocess.run([sys.executable, "-c", code], cwd=root, env=env,
                              capture_output=True, text=True, timeout=60).stdout.strip().splitlines()[-1]
         nominal, warn, crit = json.loads(out)

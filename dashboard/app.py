@@ -292,7 +292,7 @@ with st.sidebar:
             if _new_port != BOARD_PORT:
                 recalibrate_and_reload(port=_new_port, force=False)
         _icon = {"ok": "🟢", "created": "🟢", "waiting": "🟡", "error": "🔴"}.get(BOARD_CAL["state"], "⚪")
-        st.caption(f"{_icon} **Baseline**: {BOARD_CAL['reason']}  \nBoard `{BOARD_CAL['board_id']}` · build `{BOARD_CAL['build_id']}`")
+        st.caption(f"{_icon} **Baseline**: {BOARD_CAL['reason']}  \nRecorded automatically from the connected board. Build `{BOARD_CAL['build_id']}` · build `{BOARD_CAL['build_id']}`")
         _recal = st.session_state.pop("_recal_msg", None)
         if _recal:
             (st.success if _recal["state"] in ("created", "ok") else st.warning)(f"Recalibration: {_recal['reason']}")
@@ -443,7 +443,7 @@ with st.sidebar:
 
         with st.expander("⚡ FPGA Hardware Programmer", expanded=False):
             st.markdown("Burn the precompiled health monitor bitstream (Ring Oscillator, XADC, PRBS-7, UART) into the board:")
-            st.caption(f"Programs ONLY the board being monitored (`{BOARD_CAL.get('board_id')}`). "
+            st.caption(f"Programs ONLY the board being monitored (found automatically from its USB port). "
                        "The design is lost when the board loses power.")
             if st.button("🔥 Burn Precompiled Bitstream", width="stretch", disabled=not BOARD_CAL.get("board_id")):
                 with st.spinner("Programming Basys 3 FPGA over JTAG..."):
@@ -821,7 +821,7 @@ except Exception as e:
 
 if "UART" in st.session_state.data_mode and BOARD_CAL["state"] in ("waiting", "error"):
     st.warning(
-        f"**No valid baseline for this board and build yet:** {BOARD_CAL['reason']}.  \n"
+        f"**No valid baseline for the connected board yet:** {BOARD_CAL['reason']}.  \n"
         "Until a baseline is recorded the region states below are compared with placeholder limits "
         "and are not meaningful. Once the board is cool and idle, press **Recalibrate now** in the sidebar."
     )

@@ -1,5 +1,5 @@
 import os
-os.environ["FPGA_BOARD"] = "none"   # tests use the placeholder nominal, never a board calibration
+os.environ["FPGA_CALIBRATION"] = "none"   # tests use the placeholder nominal, never a board calibration
 """
 Safety behaviour of the serial receiver and the limits: nothing may leave a stale or invalid
 reading on screen as "live", and a dead sensor must never read as healthy.

@@ -13,8 +13,9 @@ defaults, NOT measured values: tune them from real board data (see calibration).
 
 Ring-oscillator limits are RELATIVE to a per-board baseline, because the absolute
 frequency depends on each region's placement and routing. A baseline is stored by
-`hardware/host/health_reader.py --calibrate` in calibration_<board>.json; select it
-with the FPGA_BOARD environment variable. Without a calibration the placeholder
+`hardware/host/health_reader.py --calibrate` (or recorded automatically by the dashboard) in
+hardware/host/calibration.json. It is one shared file, not tied to a board name; set the
+FPGA_CALIBRATION environment variable to "none" to ignore it. Without a calibration the placeholder
 nominal below is used (it is only a default, not a property of any real board).
 """
 
@@ -72,28 +73,15 @@ REGION_WEIGHTS: Dict[str, float] = {"R1": 0.35, "R2": 0.05, "R3": 0.30, "R4": 0.
 # ---------------------------------------------------------------------------
 # Per-board calibration
 # ---------------------------------------------------------------------------
-def _calibration_path(board: str) -> Path:
-    return Path(__file__).resolve().parent / "hardware" / "host" / f"calibration_{board}.json"
+def calibration_path() -> Path:
+    return Path(__file__).resolve().parent / "hardware" / "host" / "calibration.json"
 
 
-def active_board() -> Optional[str]:
-    """Board whose calibration is in force: FPGA_BOARD env var, else hardware/host/active_board.txt
-    (written by `health_reader.py --calibrate`)."""
-    board = os.environ.get("FPGA_BOARD")
-    if board:
-        return board
-    try:
-        text = (Path(__file__).resolve().parent / "hardware" / "host" / "active_board.txt").read_text().strip()
-        return text or None
-    except OSError:
+def load_calibration() -> Optional[dict]:
+    """The baseline in force, or None (no baseline recorded, or FPGA_CALIBRATION=none)."""
+    if os.environ.get("FPGA_CALIBRATION", "").lower() == "none":
         return None
-
-
-def load_calibration(board: Optional[str] = None) -> Optional[dict]:
-    board = board or active_board()
-    if not board:
-        return None
-    path = _calibration_path(board)
+    path = calibration_path()
     try:
         return json.loads(path.read_text())
     except (OSError, ValueError):

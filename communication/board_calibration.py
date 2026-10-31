@@ -1,18 +1,18 @@
 """
-Automatic per-board, per-build baseline.
+Automatic baseline for whichever Basys 3 is plugged in; nothing to set up.
 
-A ring oscillator's frequency depends on how Vivado routed it, so every bitstream build and
-every board has its own "healthy" frequencies. This module finds out which board is on the
-serial port (from its USB serial number) and which build it runs (the V= field of each
-packet), and makes sure a matching baseline exists:
+A ring oscillator's frequency depends on how Vivado routed it and on the individual chip, so the
+"healthy" frequencies are measured from the board itself. There is ONE baseline file
+(hardware/host/calibration.json), not one per board:
 
-  * matching baseline already saved      -> use it
-  * missing or recorded for another build -> record a new one, but ONLY if the board is cool,
-    idle (no stress switch up), all oscillators alive and steady; otherwise report why not.
+  * the saved baseline matches the connected board and build -> use it
+  * otherwise (new board, new build, no file)               -> record a new one, but ONLY if the
+    board is cool, idle (no stress switch up), all oscillators alive and steady; otherwise report
+    why not and leave NO baseline in force (the dashboard shows "not calibrated").
 
 Nothing is recorded from a hot or stressed board, so it can never be mistaken for healthy.
-Baselines are saved as hardware/host/calibration_<board_id>.json; the one in force is named in
-hardware/host/active_board.txt (empty = none valid, the dashboard shows "not calibrated").
+The USB serial number is stored inside the file only to notice that a different board was
+plugged in; it is never a file name or something the user selects.
 """
 
 import json
@@ -30,7 +30,7 @@ import health_rules as rules
 from hardware.host.health_reader import REGIONS, build_calibration, parse_line
 
 HOST_DIR = PROJECT_ROOT / "hardware" / "host"
-ACTIVE_FILE = HOST_DIR / "active_board.txt"
+CAL_FILE = rules.calibration_path()
 
 
 def detect_board_port() -> Optional[str]:
@@ -67,12 +67,12 @@ def board_id_for_port(port: str) -> Optional[str]:
     return None
 
 
-def calibration_path(board_id: str) -> Path:
-    return HOST_DIR / f"calibration_{board_id}.json"
-
-
-def set_active(board_id: Optional[str]) -> None:
-    ACTIVE_FILE.write_text(board_id or "", encoding="ascii")
+def clear_calibration() -> None:
+    """No baseline in force (a stale one for another board or build would be wrong)."""
+    try:
+        CAL_FILE.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def read_packets(port: str, count: int, timeout_s: float = 20.0) -> List[Dict[str, Any]]:
@@ -129,29 +129,26 @@ def ensure_calibration(port: str, force: bool = False) -> Dict[str, Any]:
                 "reason": "no telemetry packets (is sw0 down and the design programmed?)"}
 
     build_id = samples[-1].get("build_id")
-    path = calibration_path(board_id)
 
-    if path.exists() and not force:
+    if CAL_FILE.exists() and not force:
         try:
-            cal = json.loads(path.read_text())
+            cal = json.loads(CAL_FILE.read_text())
         except (OSError, ValueError):
             cal = None
-        if cal and cal.get("build_id") == build_id:
-            set_active(board_id)
+        if cal and cal.get("build_id") == build_id and cal.get("board_id") == board_id:
             return {"state": "ok", "port": port, "board_id": board_id, "build_id": build_id,
                     "reason": "saved baseline matches this board and build"}
 
     ok, reason = check_idle(samples)
     if not ok:
         if not force:
-            set_active(None)                   # a baseline for another build would be wrong
+            clear_calibration()                # a baseline for another board or build would be wrong
         # (a forced recalibration that cannot proceed leaves the working baseline untouched)
         return {"state": "waiting", "port": port, "board_id": board_id, "build_id": build_id, "reason": reason}
 
     cal = build_calibration(samples)
     cal.update({"board_id": board_id, "build_id": build_id,
                 "recorded": time.strftime("%Y-%m-%d %H:%M:%S"), "mode": "automatic"})
-    path.write_text(json.dumps(cal, indent=2))
-    set_active(board_id)
+    CAL_FILE.write_text(json.dumps(cal, indent=2))
     return {"state": "created", "port": port, "board_id": board_id, "build_id": build_id,
             "reason": f"new baseline recorded ({cal['temp_c']:.1f} C, idle)"}

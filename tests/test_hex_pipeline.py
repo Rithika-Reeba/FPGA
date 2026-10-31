@@ -1,5 +1,5 @@
 import os
-os.environ["FPGA_BOARD"] = "none"   # tests use the placeholder nominal, never a board calibration
+os.environ["FPGA_CALIBRATION"] = "none"   # tests use the placeholder nominal, never a board calibration
 """
 End-to-end checks for the real-board path: hex packet -> dashboard telemetry -> engineering limits.
 """

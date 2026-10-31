@@ -19,7 +19,7 @@ RO_STAGES = 5
 # ============================================================
 # Canonical Ring Oscillator Timing Thresholds
 # The numbers live in health_rules.py (single source of truth). The nominal is the
-# calibrated board baseline (FPGA_BOARD env var) or the 436.0 MHz placeholder.
+# calibrated board baseline (FPGA_CALIBRATION env var) or the 436.0 MHz placeholder.
 # Frequency is the primary physical measurement; Delay is deterministically derived.
 # ============================================================
 import health_rules as _rules

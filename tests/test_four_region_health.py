@@ -3,7 +3,7 @@ Tests for Four-Region Physical Health Architecture & Regional Map Rendering
 """
 
 import os
-os.environ["FPGA_BOARD"] = "none"   # tests use the placeholder nominal, never a board calibration
+os.environ["FPGA_CALIBRATION"] = "none"   # tests use the placeholder nominal, never a board calibration
 import unittest
 from dashboard.health_map import (
     generate_four_region_data,

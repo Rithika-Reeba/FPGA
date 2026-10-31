@@ -140,7 +140,7 @@ With `sw[0]` up the board sends `HELLO FPGA` instead (link test).
 A ring oscillator's frequency depends on how it was routed, so "healthy" differs per board and per build. The oscillators are pinned to fixed slices (`four_region_floorplan.tcl`) so a rebuild changes the frequencies very little, but a baseline is still tied to the build ID.
 
 When the dashboard starts it looks at the board on the USB port (identified by its USB serial number) and:
-- uses the saved baseline `hardware/host/calibration_<board>.json` if it was recorded for the same build;
+- uses the saved baseline `hardware/host/calibration.json` (one local file, git-ignored) if it was recorded for the same board and build;
 - otherwise records a new one, **but only if the board is cool (below 46 C), idle (no stress switch up), all four oscillators run and the frequencies are steady** for about 10 seconds;
 - if those conditions fail it records nothing and tells you why (a hot or stressed board is never mistaken for the healthy reference). Fix the condition and press **Recalibrate now** in the sidebar.
 

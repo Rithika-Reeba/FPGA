@@ -1,5 +1,5 @@
 import os
-os.environ["FPGA_BOARD"] = "none"   # tests use the placeholder nominal, never a board calibration
+os.environ["FPGA_CALIBRATION"] = "none"   # tests use the placeholder nominal, never a board calibration
 """
 The mock dataset, the live simulation and the estimated-health input all go through the same
 limits as the real board. These tests keep them honest: a healthy scenario never trips a limit,

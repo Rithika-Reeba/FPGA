@@ -51,5 +51,5 @@ Thumbs.db
 *.backup.*
 vivado_pid*.str
 
-# Machine-local: which board's calibration is active on this PC
-hardware/host/active_board.txt
+# Machine-local baseline recorded automatically from the connected board
+hardware/host/calibration.json

@@ -18,7 +18,7 @@ Verifies:
 """
 
 import os
-os.environ["FPGA_BOARD"] = "none"   # tests use the placeholder nominal, never a board calibration
+os.environ["FPGA_CALIBRATION"] = "none"   # tests use the placeholder nominal, never a board calibration
 import sys
 import unittest
 from pathlib import Path

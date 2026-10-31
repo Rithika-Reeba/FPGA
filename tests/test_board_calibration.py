@@ -1,5 +1,5 @@
 import os
-os.environ["FPGA_BOARD"] = "none"   # tests use the placeholder nominal, never a board calibration
+os.environ["FPGA_CALIBRATION"] = "none"   # tests use the placeholder nominal, never a board calibration
 """
 Tests for the automatic per-board / per-build baseline (communication/board_calibration.py).
 Serial access is replaced by canned packets; files go to a temporary folder.
@@ -82,13 +82,14 @@ class TestEnsureCalibration(unittest.TestCase):
         host = Path(self.tmp.name)
         patches = [
             mock.patch.object(bc, "HOST_DIR", host),
-            mock.patch.object(bc, "ACTIVE_FILE", host / "active_board.txt"),
+            mock.patch.object(bc, "CAL_FILE", host / "calibration.json"),
             mock.patch.object(bc, "board_id_for_port", return_value="BOARD1"),
         ]
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
         self.host = host
+        self.cal_file = host / "calibration.json"
 
     def run_ensure(self, samples, force=False):
         with mock.patch.object(bc, "read_packets", return_value=samples):
@@ -98,42 +99,52 @@ class TestEnsureCalibration(unittest.TestCase):
         res = self.run_ensure(steady_samples())
         self.assertEqual(res["state"], "created")
         self.assertEqual(res["board_id"], "BOARD1")
-        cal = json.loads((self.host / "calibration_BOARD1.json").read_text())
+        cal = json.loads(self.cal_file.read_text())
         self.assertEqual(cal["build_id"], "1A2B")
         self.assertEqual(cal["mode"], "automatic")
-        self.assertEqual((self.host / "active_board.txt").read_text(), "BOARD1")
+        self.assertTrue(self.cal_file.exists())
 
     def test_hot_board_records_nothing(self):
         res = self.run_ensure(steady_samples(temp_c=60.0))
         self.assertEqual(res["state"], "waiting")
-        self.assertFalse((self.host / "calibration_BOARD1.json").exists())
-        self.assertEqual((self.host / "active_board.txt").read_text(), "")
+        self.assertFalse(self.cal_file.exists())
 
     def test_matching_baseline_is_reused_even_when_warm(self):
         self.run_ensure(steady_samples())
         res = self.run_ensure(steady_samples(temp_c=60.0))
         self.assertEqual(res["state"], "ok")
-        self.assertEqual((self.host / "active_board.txt").read_text(), "BOARD1")
+        self.assertTrue(self.cal_file.exists())
 
     def test_baseline_from_another_build_is_not_used(self):
         self.run_ensure(steady_samples())
         newer = steady_samples(build_id="FFFF", temp_c=60.0)           # new build, board warm
         res = self.run_ensure(newer)
         self.assertEqual(res["state"], "waiting")
-        self.assertEqual((self.host / "active_board.txt").read_text(), "")   # stale baseline switched off
+        self.assertFalse(self.cal_file.exists())   # stale baseline switched off
 
     def test_new_build_on_a_cool_board_gets_a_fresh_baseline(self):
         self.run_ensure(steady_samples())
         res = self.run_ensure(steady_samples(build_id="FFFF"))
         self.assertEqual(res["state"], "created")
-        cal = json.loads((self.host / "calibration_BOARD1.json").read_text())
+        cal = json.loads(self.cal_file.read_text())
         self.assertEqual(cal["build_id"], "FFFF")
 
     def test_failed_forced_recalibration_keeps_the_working_baseline(self):
         self.run_ensure(steady_samples())
         res = self.run_ensure(steady_samples(temp_c=60.0), force=True)
         self.assertEqual(res["state"], "waiting")
-        self.assertEqual((self.host / "active_board.txt").read_text(), "BOARD1")
+        self.assertTrue(self.cal_file.exists())
+
+    def test_a_different_board_gets_its_own_fresh_baseline(self):
+        self.run_ensure(steady_samples())
+        with mock.patch.object(bc, "board_id_for_port", return_value="BOARD2"):
+            res = self.run_ensure(steady_samples(temp_c=60.0))       # other board, warm: cannot reuse BOARD1's
+        self.assertEqual(res["state"], "waiting")
+        self.assertFalse(self.cal_file.exists())
+        with mock.patch.object(bc, "board_id_for_port", return_value="BOARD2"):
+            res = self.run_ensure(steady_samples())
+        self.assertEqual(res["state"], "created")
+        self.assertEqual(json.loads(self.cal_file.read_text())["board_id"], "BOARD2")
 
     def test_no_packets_is_reported_not_raised(self):
         self.assertEqual(self.run_ensure([])["state"], "error")

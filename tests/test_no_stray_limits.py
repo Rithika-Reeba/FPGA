@@ -1,5 +1,5 @@
 import os
-os.environ["FPGA_BOARD"] = "none"   # tests use the placeholder nominal, never a board calibration
+os.environ["FPGA_CALIBRATION"] = "none"   # tests use the placeholder nominal, never a board calibration
 """
 Guard: the old limits of the original design (412.0 / 422.9 MHz and their delays) must not come
 back anywhere in the application code. Every limit lives in health_rules.py; a literal copy

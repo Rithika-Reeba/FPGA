@@ -4,18 +4,18 @@ Host-side reader for the Basys 3 four-region FPGA health monitor.
 The board streams one ASCII-hex line per reading, for example:
     R1=0007D0,R2=...,R3=...,R4=...,T=994,I=555,A=99A,B=555,F=F,S=0,H=1
 
-This script converts the raw codes to physical units, learns a per-board
+This script converts the raw codes to physical units, learns a
 baseline, and classifies every region as HEALTHY / WARNING / DEGRADED.
 
 Usage
 -----
     python health_reader.py --selftest
-    python health_reader.py --port COM3 --calibrate 30 --board boardA
-    python health_reader.py --port COM3 --board boardA          # live monitor
-    python health_reader.py --replay log.txt --board boardA     # offline
+    python health_reader.py --port COM3 --calibrate 30
+    python health_reader.py --port COM3                         # live monitor
+    python health_reader.py --replay log.txt                    # offline
 
-Calibration is stored per board in calibration_<board>.json next to this file, so
-two boards (e.g. one left healthy, one stressed) each keep their own baseline.
+The baseline is one file, calibration.json next to this file. It is not tied to a board name:
+the dashboard re-records it automatically whenever a different board or build is connected.
 """
 
 import argparse
@@ -70,8 +70,8 @@ def parse_line(line):
     }
 
 
-def _calib_path(board):
-    return Path(__file__).with_name(f"calibration_{board}.json")
+def _calib_path():
+    return Path(__file__).with_name("calibration.json")
 
 
 def build_calibration(samples):
@@ -190,7 +190,6 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", help="serial port, e.g. COM3")
     ap.add_argument("--replay", help="read lines from a log file instead of a serial port")
-    ap.add_argument("--board", default="board", help="name used for the calibration file")
     ap.add_argument("--calibrate", type=int, metavar="SECONDS",
                     help="record a baseline for SECONDS while the board is known healthy")
     ap.add_argument("--selftest", action="store_true")
@@ -205,7 +204,7 @@ def main():
     source = lines_from_serial(args.port) if args.port else lines_from_file(args.replay)
 
     if args.calibrate:
-        print(f"Calibrating '{args.board}' for {args.calibrate} s - keep every stress switch OFF...")
+        print(f"Calibrating for {args.calibrate} s - keep every stress switch OFF...")
         end, samples = time.time() + args.calibrate, []
         for line in source:
             reading = parse_line(line)
@@ -215,21 +214,20 @@ def main():
             if time.time() >= end:
                 break
         cal = build_calibration(samples)
-        cal.update({"board_id": args.board, "build_id": samples[-1].get("build_id"), "mode": "manual",
+        cal.update({"build_id": samples[-1].get("build_id"), "mode": "manual",
                     "recorded": time.strftime("%Y-%m-%d %H:%M:%S")})
-        _calib_path(args.board).write_text(json.dumps(cal, indent=2))
-        Path(__file__).with_name("active_board.txt").write_text(args.board)
-        print(f"\nSaved {_calib_path(args.board).name} (now the active board for the dashboard)")
+        _calib_path().write_text(json.dumps(cal, indent=2))
+        print(f"\nSaved {_calib_path().name}")
         for r in REGIONS:
             c = cal["regions"][r]
             print(f"  {r}: {c['mean_mhz']:.3f} MHz  (std {c['std_mhz']:.4f})")
         return
 
     cal = None
-    if _calib_path(args.board).exists():
-        cal = json.loads(_calib_path(args.board).read_text())
+    if _calib_path().exists():
+        cal = json.loads(_calib_path().read_text())
     else:
-        print(f"No calibration for '{args.board}' - run with --calibrate first. Showing raw values.")
+        print(f"No calibration - run with --calibrate first. Showing raw values.")
     try:
         for line in source:
             reading = parse_line(line)

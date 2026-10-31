@@ -1,5 +1,5 @@
 import os
-os.environ["FPGA_BOARD"] = "none"   # tests use the placeholder nominal, never a board calibration
+os.environ["FPGA_CALIBRATION"] = "none"   # tests use the placeholder nominal, never a board calibration
 """
 The mock CSV is generated around the placeholder nominal. When a board is calibrated the replay
 is rescaled to that board's baseline. It must be rescaled exactly ONCE (a duplicated block once
