@@ -34,7 +34,8 @@ module fpga_health_top #(
     parameter WARN_SHIFT    = 8,         // 1/256 = 0.39 % drop => warning
     parameter DEG_SHIFT     = 6,         // 1/64  = 1.56 % drop => degraded
     parameter REGION_QUORUM = 2,         // regions that must be bad before the overall state changes
-    parameter PAGE_TICKS    = 200000000  // display page time (2 s)
+    parameter PAGE_TICKS    = 200000000, // display page time (2 s)
+    parameter [15:0] BUILD_ID = 16'h0001  // set by build_bitstream.tcl; baselines are tied to it
 )(
     input  wire        clk,
     input  wire        btnC,
@@ -241,6 +242,7 @@ module fpga_health_top #(
         .i_vccaux(vccaux_code),
         .i_vccbram(vccbram_code),
         .i_verdict(verdict),
+        .i_build_id(BUILD_ID),
         .i_uart_busy(uart_busy),
         .o_uart_valid(tx_valid),
         .o_uart_data(tx_data),

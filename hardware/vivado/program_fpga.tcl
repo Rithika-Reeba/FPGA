@@ -27,6 +27,31 @@ puts "======================================================================"
 
 open_hw_manager
 connect_hw_server -allow_non_jtag
+
+# More than one board connected: never guess. The board id is the Digilent cable id, which is the
+# USB serial number without its last letter (e.g. 210183B31BC1); pass it after -tclargs.
+set targets [get_hw_targets]
+if {[llength $targets] == 0} {
+    puts "ERROR: no board found. Check the USB cable and the power switch."
+    exit 1
+}
+if {[llength $targets] > 1} {
+    if {[llength $argv] < 1} {
+        puts "ERROR: [llength $targets] boards are connected:"
+        foreach tg $targets { puts "    $tg" }
+        puts "Say which one to program: vivado -mode batch -source program_fpga.tcl -tclargs <board id>"
+        exit 1
+    }
+    set want [lindex $argv 0]
+    set picked {}
+    foreach tg $targets { if {[string match "*${want}*" $tg]} { lappend picked $tg } }
+    if {[llength $picked] != 1} {
+        puts "ERROR: board id '$want' matches [llength $picked] of the connected boards"
+        exit 1
+    }
+    current_hw_target [lindex $picked 0]
+}
+puts "--> Programming target: [current_hw_target]"
 open_hw_target
 
 # Select the Artix-7 device

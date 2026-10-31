@@ -121,19 +121,30 @@ Overall health follows the dashboard's rule: a region only changes the overall s
 
 ## 4. Telemetry Verification
 
-### Step 1: Verify Serial Stream in Terminal
-Open a serial terminal (PuTTY, Tera Term, or Python serial monitor) on your Basys 3 COM port at **115200 baud, 8 data bits, no parity, 1 stop bit (8N1)**.
-
-You will observe live 1 Hz JSON telemetry frames:
-```json
-{"Temperature":35.2,"VCCINT":1.002,"VCCAUX":1.801,"VCCBRAM":1.000,"RO_Frequency":249.8,"Error_Rate":0.000010}
-```
-
-If you flip `sw[0]` UP, the board outputs the handshake string:
+### Step 1: Verify the serial stream
+Open the board's COM port at **115200 baud, 8N1** (PuTTY, Tera Term, or `python hardware/host/health_reader.py --port COMx`). With `sw[0]` **down** you get two lines per second:
 ```text
-HELLO FPGA - Basys 3 Artix-7 Health Monitor Online
+R1=3180E8,R2=3C34B6,R3=436C92,R4=46D74A,T=A07,I=54E,A=99C,B=550,F=F,S=0,H=0,V=896F
 ```
+| Field | Meaning |
+| :--- | :--- |
+| `R1`..`R4` | Ring-oscillator edge count per 10 ms gate (hex). MHz = count / 10000 |
+| `T` `I` `A` `B` | Raw 12-bit XADC codes: die temperature, VCCINT, VCCAUX, VCCBRAM |
+| `F` / `S` | Oscillator-alive / stress-active flags, one bit per region (R1 = bit 0) |
+| `H` | On-board verdict: 0 not calibrated, 1 healthy, 2 warning, 3 degraded |
+| `V` | Build ID of this bitstream (baselines are tied to it) |
 
+With `sw[0]` up the board sends `HELLO FPGA` instead (link test).
+
+### Automatic baseline (per board and per build)
+A ring oscillator's frequency depends on how it was routed, so "healthy" differs per board and per build. The oscillators are pinned to fixed slices (`four_region_floorplan.tcl`) so a rebuild changes the frequencies very little, but a baseline is still tied to the build ID.
+
+When the dashboard starts it looks at the board on the USB port (identified by its USB serial number) and:
+- uses the saved baseline `hardware/host/calibration_<board>.json` if it was recorded for the same build;
+- otherwise records a new one, **but only if the board is cool (below 46 C), idle (no stress switch up), all four oscillators run and the frequencies are steady** for about 10 seconds;
+- if those conditions fail it records nothing and tells you why (a hot or stressed board is never mistaken for the healthy reference). Fix the condition and press **Recalibrate now** in the sidebar.
+
+All thresholds are in `health_rules.py`.
 ### Step 2: Connect to Dashboard
 1. Start the Streamlit application:
    ```powershell

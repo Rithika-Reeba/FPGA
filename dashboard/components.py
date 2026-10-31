@@ -119,7 +119,7 @@ def render_primary_health_kpis(
             render_primary_health_card(
                 title="Error Risk",
                 value=risk_label,
-                subtext=f"Rate: {error_rate:.5f}",
+                subtext=f"Rate: {error_rate:.5f} (SIMULATED, not measured by the board)",
                 state_color=risk_color,
                 bg_color="rgba(255, 23, 68, 0.12)" if risk_label == "High" else ("rgba(255, 214, 0, 0.12)" if risk_label == "Medium" else "rgba(0, 230, 118, 0.12)")
             )
@@ -220,10 +220,10 @@ def render_measurements_grid(latest: pd.Series, baseline: Dict[str, float], samp
     with c7:
         st.html(
             render_measurement_card(
-                label="Functional Error Rate",
+                label="Functional Error Rate (SIMULATED)",
                 value_str=f"{latest['Error_Rate']:.5f}",
                 unit="",
-                delta_str=f"{'ELEVATED' if latest['Error_Rate'] > 0.001 else 'NOMINAL'}",
+                delta_str=f"{'ELEVATED' if latest['Error_Rate'] > 0.001 else 'NOMINAL'} · simulated",
                 delta_color="#FF9100" if latest['Error_Rate'] > 0.001 else "#00E676"
             )
         )
@@ -829,7 +829,7 @@ def render_hardware_connection_panel(meta: Dict[str, Any]):
         {"Channel": "VCCBRAM RAM Voltage", "Provenance": "🟢 MEASURED (Physical On-Chip)", "Source": "7-Series XADC (DRP 0x06)"},
         {"Channel": "RO Frequency", "Provenance": "🟢 MEASURED (Physical On-Chip)", "Source": "5-Stage Ring Oscillator + 10ms Gated Counter"},
         {"Channel": "RO Stage Delay", "Provenance": "⚡ DERIVED (Mathematical Formula)", "Source": "tau = 1000 / (2 * 5 * f_MHz) = 100 / f_MHz"},
-        {"Channel": "Functional Error Rate", "Provenance": "🟢 MEASURED (Physical On-Chip)", "Source": "PRBS-7 Hardware LFSR Pattern Checker"}
+        {"Channel": "Functional Error Rate", "Provenance": "🟣 SIMULATED (not measured by the board)", "Source": "The board firmware has no error counter; this value is a simulated placeholder"}
     ]
     df_prov = pd.DataFrame(prov_rows)
     st.dataframe(df_prov, width="stretch", hide_index=True)

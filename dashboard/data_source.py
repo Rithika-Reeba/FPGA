@@ -137,16 +137,6 @@ class MockCSVDataSource:
                 self.raw_df[f"RO_{r}"] = (self.raw_df[f"RO_{r}"] * (_nom(r) / _ref)).round(2)
                 self.raw_df[f"RO_{r}_Delay_ns"] = self.raw_df[f"RO_{r}"].apply(lambda f: calculate_ro_delay_ns(f, RO_STAGES))
 
-        # The CSV was generated around the placeholder nominal; when a board is calibrated,
-        # rescale it so "healthy" in the replay means healthy for that board.
-        _ref = _hr.RO_PLACEHOLDER_NOMINAL_MHZ
-        if abs(_NOM - _ref) > 1e-9 or any(abs(_nom(r) - _ref) > 1e-9 for r in ["R1", "R2", "R3", "R4"]):
-            self.raw_df["RO_Frequency"] = self.raw_df["RO_Frequency"] * (_NOM / _ref)
-            self.raw_df["RO_Delay_ns"] = self.raw_df["RO_Frequency"].apply(lambda f: calculate_ro_delay_ns(f, RO_STAGES))
-            for r in ["R1", "R2", "R3", "R4"]:
-                self.raw_df[f"RO_{r}"] = (self.raw_df[f"RO_{r}"] * (_nom(r) / _ref)).round(2)
-                self.raw_df[f"RO_{r}_Delay_ns"] = self.raw_df[f"RO_{r}"].apply(lambda f: calculate_ro_delay_ns(f, RO_STAGES))
-
         # Baseline from early healthy samples (first 50 samples average)
         early_window = self.raw_df.head(50)
         base_cols = ["Temperature", "VCCINT", "VCCAUX", "VCCBRAM", "RO_Frequency", "RO_Delay_ns", "Error_Rate"]

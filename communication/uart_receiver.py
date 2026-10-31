@@ -26,6 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import RO_STAGES, calculate_ro_delay_ns
+import health_rules
 from hardware.host.health_reader import parse_line as parse_hex_line
 
 try:
@@ -655,8 +656,11 @@ class FPGAUARTReceiver:
 
         regions = ("R1", "R2", "R3", "R4")
         freqs = {r: (p["freq_mhz"][r] if p["alive"][r] else 0.0) for r in regions}
-        running = [f for f in freqs.values() if f > 0.0]
-        ro_freq = sum(running) / len(running) if running else 0.0
+        # Aggregate = weighted average with the SAME weights as the aggregate nominal in
+        # health_rules (a plain mean would differ from it once regions have different baselines).
+        running = [r for r in regions if freqs[r] > 0.0]
+        weight = sum(health_rules.REGION_WEIGHTS[r] for r in running)
+        ro_freq = (sum(health_rules.REGION_WEIGHTS[r] * freqs[r] for r in running) / weight) if weight else 0.0
 
         temp, vccint, vccaux, vccbram = p["temp_c"], p["VCCINT"], p["VCCAUX"], p["VCCBRAM"]
         if not (0.0 <= temp <= 125.0 and 0.5 <= vccint <= 1.5 and 1.0 <= vccaux <= 2.5 and 0.5 <= vccbram <= 1.5):
@@ -677,7 +681,7 @@ class FPGAUARTReceiver:
         provenance = {
             "Temperature": "MEASURED", "VCCINT": "MEASURED", "VCCAUX": "MEASURED",
             "VCCBRAM": "MEASURED", "RO_Frequency": "MEASURED", "RO_Delay_ns": "DERIVED",
-            "Error_Rate": "NOT_AVAILABLE",
+            "Error_Rate": "SIMULATED",
         }
         for r in regions:
             out[f"RO_{r}"] = round(freqs[r], 2)

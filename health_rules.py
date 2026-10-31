@@ -46,6 +46,12 @@ VOLT_NOMINAL_V: Dict[str, float] = {"VCCINT": 1.0, "VCCAUX": 1.8, "VCCBRAM": 1.0
 VOLT_WARN_FRAC = 0.05     # +/- 5 %  -> Warning
 VOLT_CRIT_FRAC = 0.10     # +/- 10 % -> Degraded
 
+# Automatic baseline on first plug-in: only recorded while the board is cool, idle and steady,
+# so a hot or stressed board can never be mistaken for the healthy reference.
+TEMP_AUTOCAL_MAX_C = 46.0     # idle die temperature on the Basys 3 is about 42-43 C
+AUTOCAL_SAMPLES = 20          # about 10 s of telemetry (2 packets per second)
+AUTOCAL_MAX_REL_STD = 0.0005  # per-region frequency std/mean must stay below 0.05 %
+
 # Functional error rate (fraction of bad bits). Not produced by the current board
 # firmware; kept for the simulated sources and for a future hardware canary path.
 ERROR_RATE_WARN = 0.0005

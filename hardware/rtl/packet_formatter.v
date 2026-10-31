@@ -3,7 +3,7 @@
 // Module Name: packet_formatter
 // Description: Serialises raw telemetry as one fixed-length ASCII-hex line:
 //
-//   R1=cccccc,R2=cccccc,R3=cccccc,R4=cccccc,T=ttt,I=iii,A=aaa,B=bbb,F=f,S=s,H=h\r\n
+//   R1=cccccc,R2=cccccc,R3=cccccc,R4=cccccc,T=ttt,I=iii,A=aaa,B=bbb,F=f,S=s,H=h,V=vvvv\r\n
 //
 //   Rn  24-bit RO edge count of region n over one gate window (hex)
 //   T   XADC die temperature code (12-bit)      I/A/B  VCCINT/VCCAUX/VCCBRAM codes
@@ -32,6 +32,7 @@ module packet_formatter #(
     input  wire [11:0] i_vccaux,
     input  wire [11:0] i_vccbram,
     input  wire [1:0]  i_verdict,
+    input  wire [15:0] i_build_id,
     input  wire        i_uart_busy,
     output reg         o_uart_valid,
     output reg  [7:0]  o_uart_data,
@@ -39,7 +40,7 @@ module packet_formatter #(
 );
 
     localparam INTERVAL_TICKS = CLK_FREQ_HZ / TRANSMIT_HZ;
-    localparam PKT_BYTES      = 77;
+    localparam PKT_BYTES      = 84;
 
     function [7:0] hx;
         input [3:0] n;
@@ -56,6 +57,13 @@ module packet_formatter #(
         end
     endfunction
 
+    function [31:0] hex4;
+        input [15:0] v;
+        begin
+            hex4 = {hx(v[15:12]), hx(v[11:8]), hx(v[7:4]), hx(v[3:0])};
+        end
+    endfunction
+
     function [23:0] hex3;
         input [11:0] v;
         begin
@@ -63,7 +71,7 @@ module packet_formatter #(
         end
     endfunction
 
-    wire [615:0] pkt_live = {
+    wire [671:0] pkt_live = {
         "R1=", hex6(i_cnt1), ",",
         "R2=", hex6(i_cnt2), ",",
         "R3=", hex6(i_cnt3), ",",
@@ -74,13 +82,13 @@ module packet_formatter #(
         "B=",  hex3(i_vccbram), ",",
         "F=",  hx(i_alive),  ",",
         "S=",  hx(i_stress), ",",
-        "H=",  hx({2'b00, i_verdict}),
+        "H=",  hx({2'b00, i_verdict}), ",V=", hex4(i_build_id),
         8'h0D, 8'h0A
     };
 
-    wire [615:0] pkt_hello = {"HELLO FPGA", 8'h0D, 8'h0A, 520'd0};
+    wire [671:0] pkt_hello = {"HELLO FPGA", 8'h0D, 8'h0A, 576'd0};
 
-    reg [615:0] pkt;
+    reg [671:0] pkt;
     reg [6:0]   pkt_len;
     reg [6:0]   idx;
     reg [27:0]  timer;
@@ -93,7 +101,7 @@ module packet_formatter #(
 
     reg [2:0] state;
 
-    wire [6:0] ridx = 7'd76 - idx;           // byte 0 lives in the top bits
+    wire [6:0] ridx = 7'd83 - idx;           // byte 0 lives in the top bits
     wire [9:0] lsb  = {ridx, 3'b000};
 
     always @(posedge clk) begin
@@ -104,7 +112,7 @@ module packet_formatter #(
             state       <= S_IDLE;
             idx         <= 7'd0;
             pkt_len     <= 7'd0;
-            pkt         <= 616'd0;
+            pkt         <= 672'd0;
             o_uart_data <= 8'd0;
             o_tx_active <= 1'b0;
         end else begin

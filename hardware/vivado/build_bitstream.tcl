@@ -26,7 +26,9 @@ read_xdc $proj_root/constraints/basys3.xdc
 
 # 3. Synthesis
 puts "--> Running Synthesis (preserving module hierarchy for Pblock assignment)..."
-synth_design -top fpga_health_top -part xc7a35tcpg236-1 -flatten_hierarchy rebuilt
+set build_id [expr {([clock seconds] % 65534) + 1}]
+puts "--> Build ID: [format %04X $build_id] (sent in every telemetry packet as V=; baselines are tied to it)"
+synth_design -top fpga_health_top -part xc7a35tcpg236-1 -flatten_hierarchy rebuilt -generic BUILD_ID=$build_id
 
 # Allow intentional combinatorial feedback loop for the Ring Oscillators
 set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets -hierarchical *stage*out*]

@@ -30,7 +30,7 @@ LINE_RE = re.compile(
     r"^R1=(?P<r1>[0-9A-F]{6}),R2=(?P<r2>[0-9A-F]{6}),R3=(?P<r3>[0-9A-F]{6}),"
     r"R4=(?P<r4>[0-9A-F]{6}),T=(?P<t>[0-9A-F]{3}),I=(?P<i>[0-9A-F]{3}),"
     r"A=(?P<a>[0-9A-F]{3}),B=(?P<b>[0-9A-F]{3}),F=(?P<f>[0-9A-F]),"
-    r"S=(?P<s>[0-9A-F]),H=(?P<h>[0-9A-F])$"
+    r"S=(?P<s>[0-9A-F]),H=(?P<h>[0-9A-F])(?:,V=(?P<v>[0-9A-F]{4}))?$"
 )
 
 GATE_SECONDS = 0.010            # must match GATE_TICKS / 100 MHz in the RTL
@@ -50,7 +50,7 @@ def parse_line(line):
     m = LINE_RE.match(line.strip())
     if not m:
         return None
-    g = {k: int(v, 16) for k, v in m.groupdict().items()}
+    g = {k: int(v, 16) for k, v in m.groupdict().items() if v is not None}
     alive = [bool(g["f"] >> n & 1) for n in range(4)]
     stress = [bool(g["s"] >> n & 1) for n in range(4)]
     freq = {}
@@ -66,6 +66,7 @@ def parse_line(line):
         "VCCAUX": g["a"] * 3.0 / 4096,
         "VCCBRAM": g["b"] * 3.0 / 4096,
         "board_verdict": {0: UNCAL, 1: HEALTHY, 2: WARNING, 3: DEGRADED}[g["h"] & 3],
+        "build_id": ("%04X" % g["v"]) if "v" in g else None,
     }
 
 
@@ -206,6 +207,8 @@ def main():
             if time.time() >= end:
                 break
         cal = build_calibration(samples)
+        cal.update({"board_id": args.board, "build_id": samples[-1].get("build_id"), "mode": "manual",
+                    "recorded": time.strftime("%Y-%m-%d %H:%M:%S")})
         _calib_path(args.board).write_text(json.dumps(cal, indent=2))
         Path(__file__).with_name("active_board.txt").write_text(args.board)
         print(f"\nSaved {_calib_path(args.board).name} (now the active board for the dashboard)")

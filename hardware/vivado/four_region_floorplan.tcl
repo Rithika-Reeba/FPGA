@@ -71,3 +71,41 @@ foreach pb $pb_list {
 }
 
 puts "SUCCESS: Four-region physical floorplan verified successfully."
+
+# ------------------------------------------------------------------------------
+# Pin each ring oscillator to fixed slices so its frequency is repeatable from build to build.
+# (Without this the router places/routes the five LUTs differently on every build, which moved
+# the oscillator frequencies by tens of percent and made every calibration build-specific.)
+# Four LUTs share one slice (A6..D6LUT); the fifth sits in the slice directly above it.
+# ------------------------------------------------------------------------------
+proc find_slice_pair {xc yc} {
+    for {set d 0} {$d <= 17} {incr d} {
+        foreach x [list [expr {$xc + $d}] [expr {$xc - $d}]] {
+            if {$x < 0} { continue }
+            if {[llength [get_sites -quiet SLICE_X${x}Y${yc}]] && [llength [get_sites -quiet SLICE_X${x}Y[expr {$yc + 1}]]]} {
+                return $x
+            }
+        }
+    }
+    error "no slice pair found near SLICE_X${xc}Y${yc}"
+}
+
+proc pin_ring_oscillator {idx xc yc} {
+    set x    [find_slice_pair $xc $yc]
+    set bels {A6LUT B6LUT C6LUT D6LUT A6LUT}
+    set ys   [list $yc $yc $yc $yc [expr {$yc + 1}]]
+    for {set k 0} {$k < 5} {incr k} {
+        set c [get_cells -hierarchical -quiet -filter "NAME =~ u_region$idx/u_ring_osc/stage${k}_out_inferred_i_*"]
+        if {[llength $c] != 1} {
+            error "ring oscillator stage $k of region $idx: expected 1 LUT, found [llength $c]"
+        }
+        set_property LOC SLICE_X${x}Y[lindex $ys $k] $c
+        set_property BEL [lindex $bels $k] $c
+    }
+    puts "    Region $idx ring oscillator pinned to SLICE_X${x}Y${yc}/Y[expr {$yc + 1}]"
+}
+
+pin_ring_oscillator 1 20 125
+pin_ring_oscillator 2 45 125
+pin_ring_oscillator 3 18 25
+pin_ring_oscillator 4 50 25

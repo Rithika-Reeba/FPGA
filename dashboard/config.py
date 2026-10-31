@@ -1878,7 +1878,10 @@ def evaluate_engineering_limits(
                 measured_str = f"{val_f:.1f} MHz"
                 limit_str = f"{cfg_ro['warning_low']:.1f} MHz"
                 derived_delay_str = f"{equiv_delay:.4f} ns (derived from RO frequency)"
-    elif "RO_Delay_ns" in telemetry:
+    elif not has_regional_data and "RO_Delay_ns" in telemetry:
+        # Aggregate delay is only judged when there is no per-region data; otherwise the regions
+        # (each against its own baseline) govern, and a mean of differing regions must not
+        # trigger a limit on its own.
         delay_eval = evals["RO_Delay_ns"]
         val_d = float(telemetry["RO_Delay_ns"])
         cfg_d = SENSOR_CONFIG["RO_Delay_ns"]

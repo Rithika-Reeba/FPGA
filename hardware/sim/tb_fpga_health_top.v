@@ -135,6 +135,7 @@ module tb_fpga_health_top;
     function [23:0] f_f;  input dummy; begin f_f  = hexval(66, 1); end endfunction
     function [23:0] f_h;  input dummy; begin f_h  = hexval(74, 1); end endfunction
     function [23:0] f_s;  input dummy; begin f_s  = hexval(70, 1); end endfunction
+    function [23:0] f_v;  input dummy; begin f_v  = hexval(78, 4); end endfunction
 
     // -------------------------------------------------------------------------
     // Test sequence
@@ -147,7 +148,7 @@ module tb_fpga_health_top;
         $display("== Phase 1: uncalibrated telemetry ==");
         wait_lines(3);
         show_line;
-        check(last_len == 77,                "packet length is 77 bytes");
+        check(last_len == 84,                "packet length is 84 bytes");
         check(ch(0) == "R" && ch(2) == "=",  "packet starts with R1=");
         check(f_r1(0) >= 24'd1990 && f_r1(0) <= 24'd2010, "R1 count ~2000 (20 MHz x 100 us)");
         check(f_r4(0) >= 24'd1990 && f_r4(0) <= 24'd2010, "R4 count ~2000");
@@ -156,6 +157,7 @@ module tb_fpga_health_top;
         check(f_a(0) == 24'h99A,             "VCCAUX code from XADC stub");
         check(f_f(0) == 24'hF,               "all four oscillators alive");
         check(f_h(0) == 24'h0,               "verdict 0 = not calibrated");
+        check(f_v(0) == 24'h0001,           "build ID V=0001 is reported in the packet");
         check(led[4:2] == 3'b000,           "health LEDs off while uncalibrated");
 
         $display("== Phase 2: calibrate with btnU ==");

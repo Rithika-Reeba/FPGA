@@ -21,6 +21,27 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# -----------------------------------------------------------------------------
+# Automatic board baseline. Must run BEFORE the config modules are imported (they read the
+# calibration once, at import). The result is cached for the life of the server.
+# -----------------------------------------------------------------------------
+import os
+from communication.board_calibration import detect_board_port, ensure_calibration, list_board_ports
+
+
+@st.cache_resource(show_spinner=False)
+def auto_baseline(port) -> dict:
+    if not port:
+        return {"state": "no-board", "port": None, "board_id": None, "build_id": None,
+                "reason": "no Basys 3 detected on USB"}
+    return ensure_calibration(port)
+
+
+# One shared choice of board for the baseline AND the serial receiver (they must never differ):
+# the board picked in the sidebar, else FPGA_PORT, else the first board found.
+BOARD_PORT = st.session_state.get("board_port") or os.environ.get("FPGA_PORT") or detect_board_port()
+BOARD_CAL = auto_baseline(BOARD_PORT)
+
 from config import RO_STAGES, RO_FREQ_NOMINAL_MHZ
 import health_rules
 from dashboard.config import (
@@ -113,10 +134,41 @@ def get_shared_uart_source(port: str) -> LiveUARTDataSource:
     return LiveUARTDataSource(port=port)
 
 
+_PROJECT_MODULES = (
+    "health_rules", "config", "dashboard.config", "dashboard.charts", "dashboard.components",
+    "dashboard.data_source", "dashboard.health_map", "agent.langgraph_agent",
+    "communication.uart_receiver", "communication.board_calibration", "hardware.host.health_reader",
+)
+
+
+def recalibrate_and_reload(port=None, force=True) -> None:
+    """Record a baseline now (force: a fresh one; the board must be cool and idle), then reload
+    every project module so the new numbers take effect everywhere without restarting the
+    server. Also used to switch to another board (port given, force off)."""
+    try:
+        st.session_state.uart_source.disconnect()          # free the serial port first
+    except Exception:
+        pass
+    port = port or BOARD_PORT
+    if port:
+        st.session_state["board_port"] = port
+    st.session_state["_recal_msg"] = (
+        ensure_calibration(port, force=force) if port
+        else {"state": "no-board", "reason": "no Basys 3 detected on USB"}
+    )
+    auto_baseline.clear()
+    get_shared_uart_source.clear()
+    for name in _PROJECT_MODULES:
+        sys.modules.pop(name, None)
+    for key in ("uart_source", "sim_source", "mock_source", "estimated_source"):
+        st.session_state.pop(key, None)
+    st.rerun()
+
+
 # =============================================================================
 # Session State Initialization
 # =============================================================================
-detected_fpga_port = FPGAUARTReceiver.detect_fpga_port()
+detected_fpga_port = BOARD_PORT or FPGAUARTReceiver.detect_fpga_port()
 
 if "data_mode" not in st.session_state:
     if detected_fpga_port:
@@ -230,6 +282,22 @@ with st.sidebar:
     elif "Physical UART" in data_mode:
         st.markdown("#### 🔌 Basys 3 Hardware Interface")
         rcv = st.session_state.uart_source.receiver
+
+        _boards = list_board_ports()
+        if len(_boards) > 1:
+            _labels = [f"{dev} - board {bid}" for dev, bid in _boards]
+            _cur = next((i for i, (dev, _) in enumerate(_boards) if dev == BOARD_PORT), 0)
+            _pick = st.selectbox("Board to monitor", _labels, index=_cur, key="board_pick")
+            _new_port = _boards[_labels.index(_pick)][0]
+            if _new_port != BOARD_PORT:
+                recalibrate_and_reload(port=_new_port, force=False)
+        _icon = {"ok": "🟢", "created": "🟢", "waiting": "🟡", "error": "🔴"}.get(BOARD_CAL["state"], "⚪")
+        st.caption(f"{_icon} **Baseline**: {BOARD_CAL['reason']}  \nBoard `{BOARD_CAL['board_id']}` · build `{BOARD_CAL['build_id']}`")
+        _recal = st.session_state.pop("_recal_msg", None)
+        if _recal:
+            (st.success if _recal["state"] in ("created", "ok") else st.warning)(f"Recalibration: {_recal['reason']}")
+        if st.button("📏 Recalibrate now (board cool and idle)", width="stretch", key="recal_btn"):
+            recalibrate_and_reload()
 
         # Real-time connection badge
         if rcv.is_streaming:
@@ -783,6 +851,13 @@ except Exception as e:
 # =============================================================================
 # DASHBOARD PRESENTATION (Audited Structure & Separate Graphs)
 # =============================================================================
+
+if "UART" in st.session_state.data_mode and BOARD_CAL["state"] in ("waiting", "error"):
+    st.warning(
+        f"**No valid baseline for this board and build yet:** {BOARD_CAL['reason']}.  \n"
+        "Until a baseline is recorded the region states below are compared with placeholder limits "
+        "and are not meaningful. Once the board is cool and idle, press **Recalibrate now** in the sidebar."
+    )
 
 # 1. Header, FPGA Chip Logo, Monitoring Status
 render_header(
