@@ -21,20 +21,7 @@ OUTPUT_FILE = PROJECT_ROOT / "data" / "raw" / "mock_fpga_data.csv"
 
 np.random.seed(42)
 
-# The simulated ageing scenario is a 0..1 timeline. Physical values are interpolated
-# between these knots so the scenario crosses the REAL limits (health_rules.py) at the
-# intended moments: healthy for the first ~35 %, warning until ~70 %, degraded after.
-KNOTS = [0.0, 0.35, 0.70, 1.0]
-
-_W = rules.RO_WARN_DROP_PCT
-_C = rules.RO_CRIT_DROP_PCT
-RO_DROP_PCT_KNOTS = [0.0, 0.9 * _W, 0.95 * _C, 2.5 * _C]            # % below nominal
-TEMP_KNOTS = [35.0, 50.0, rules.TEMP_WARN_C + 2.0, rules.TEMP_CRIT_C + 2.0]
-ERROR_KNOTS = [0.00001, 0.7 * rules.ERROR_RATE_WARN, 0.7 * rules.ERROR_RATE_CRIT, 1.5 * rules.ERROR_RATE_CRIT]
-
-
-def _at(degradation, knots):
-    return float(np.interp(degradation, KNOTS, knots))
+# The ageing scenario (0..1 timeline) lives in health_rules.py and is shared with the live simulation.
 
 
 # ============================================================
@@ -56,7 +43,7 @@ def generate_measurement(timestamp, degradation):
     nominal = rules.RO_PLACEHOLDER_NOMINAL_MHZ
 
     # Temperature (degC)
-    temperature = _at(degradation, TEMP_KNOTS) + np.random.normal(0, 0.3)
+    temperature = rules.scenario_temp_c(degradation) + np.random.normal(0, 0.3)
 
     # Supply voltages (V): small drift, stays inside the +/-5 % band
     vccint = 1.000 - 0.010 * degradation + np.random.normal(0, 0.001)
@@ -64,13 +51,13 @@ def generate_measurement(timestamp, degradation):
     vccbram = 1.000 - 0.008 * degradation + np.random.normal(0, 0.001)
 
     # Ring oscillator frequency (MHz): drops below the placeholder nominal as the part ages
-    ro_frequency = nominal * (1.0 - _at(degradation, RO_DROP_PCT_KNOTS) / 100.0) + np.random.normal(0, 0.1)
+    ro_frequency = nominal * (1.0 - rules.scenario_ro_drop_pct(degradation) / 100.0) + np.random.normal(0, 0.1)
 
     # Physical derived RO stage delay (ns): tau = 1000 / (2 * N * f_MHz)
     ro_delay_ns = calculate_ro_delay_ns(ro_frequency, stages=RO_STAGES)
 
     # Functional error rate
-    error_rate = max(0.0, _at(degradation, ERROR_KNOTS) + np.random.normal(0, 0.00002))
+    error_rate = max(0.0, rules.scenario_error_rate(degradation) + np.random.normal(0, 0.00002))
 
     # Health label from the shared rules
     health = rules.worst_state([

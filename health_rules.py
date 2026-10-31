@@ -198,3 +198,35 @@ def classify_voltage(rail: str, volts: float) -> str:
     if dev >= VOLT_WARN_FRAC:
         return WARNING
     return HEALTHY
+
+
+# ---------------------------------------------------------------------------
+# Simulated ageing scenario: used by BOTH the mock dataset generator and the live simulation, so
+# they cannot disagree. d in [0, 1] is the "ageing" slider. The physical values are interpolated
+# between knots chosen so the scenario crosses the REAL limits above at the intended moments:
+# Healthy up to about d = 0.35, Warning until about d = 0.70, Degraded after that.
+# ---------------------------------------------------------------------------
+SCENARIO_KNOTS = [0.0, 0.35, 0.70, 1.0]
+SCENARIO_REGION_FACTORS = {"R1": 1.00, "R2": 1.08, "R3": 0.92, "R4": 1.15}   # regions age a little differently
+
+
+def _interp(x: float, xs, ys) -> float:
+    x = min(max(x, xs[0]), xs[-1])
+    for i in range(1, len(xs)):
+        if x <= xs[i]:
+            span = xs[i] - xs[i - 1]
+            return ys[i - 1] + (ys[i] - ys[i - 1]) * ((x - xs[i - 1]) / span if span else 0.0)
+    return ys[-1]
+
+
+def scenario_ro_drop_pct(d: float) -> float:
+    """RO frequency drop (percent below baseline) at ageing level d."""
+    return _interp(d, SCENARIO_KNOTS, [0.0, 0.9 * RO_WARN_DROP_PCT, 0.95 * RO_CRIT_DROP_PCT, 2.5 * RO_CRIT_DROP_PCT])
+
+
+def scenario_temp_c(d: float) -> float:
+    return _interp(d, SCENARIO_KNOTS, [35.0, 50.0, TEMP_WARN_C + 2.0, TEMP_CRIT_C + 2.0])
+
+
+def scenario_error_rate(d: float) -> float:
+    return _interp(d, SCENARIO_KNOTS, [0.00001, 0.7 * ERROR_RATE_WARN, 0.7 * ERROR_RATE_CRIT, 1.5 * ERROR_RATE_CRIT])

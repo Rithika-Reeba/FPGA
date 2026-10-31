@@ -211,7 +211,7 @@ class LiveSimulationDataSource:
         self.buffer_size = buffer_size
         self.buffer: List[Dict[str, float]] = []
         self.step_count = 0
-        self.baseline_sample = {
+        self.baseline_sample = _apply_calibration({
             "Temperature": 35.0,
             "VCCINT": 1.000,
             "VCCAUX": 1.800,
@@ -227,7 +227,7 @@ class LiveSimulationDataSource:
             "RO_R4": _nom("R4"),
             "RO_R4_Delay_ns": 0.2294,
             "Error_Rate": 0.00001
-        }
+        })
         self._initialize_buffer()
 
     def _initialize_buffer(self):
@@ -239,26 +239,30 @@ class LiveSimulationDataSource:
             self.buffer.append(meas)
 
     def _generate_step(self, degradation: float) -> Dict[str, float]:
+        """
+        One simulated reading. Every physical value follows the shared ageing scenario in
+        health_rules.py (the same one the mock dataset uses), and each region varies around ITS OWN
+        nominal, like a calibrated board, so a healthy simulation never trips a limit.
+        """
         self.step_count += 1
         deg = min(1.0, max(0.0, degradation))
-        
-        temp = 35.0 + 18.0 * deg + np.random.normal(0, 0.7)
+
+        temp = _hr.scenario_temp_c(deg) + np.random.normal(0, 0.3)
         vccint = 1.000 - 0.010 * deg + np.random.normal(0, 0.0008)
         vccaux = 1.800 - 0.010 * deg + np.random.normal(0, 0.0008)
         vccbram = 1.000 - 0.008 * deg + np.random.normal(0, 0.0008)
-        ro_freq = _NOM * (1.0 - 0.0573 * deg) + np.random.normal(0, 0.6)
+
+        drop = _hr.scenario_ro_drop_pct(deg) / 100.0
+        regions = {}
+        for r in ("R1", "R2", "R3", "R4"):
+            nominal = _nom(r)
+            regions[r] = nominal * (1.0 - drop * _hr.SCENARIO_REGION_FACTORS[r]) + np.random.normal(0, 0.0002 * nominal)
+        weights = _hr.REGION_WEIGHTS
+        ro_freq = sum(weights[r] * regions[r] for r in regions) / sum(weights.values())
         ro_delay = calculate_ro_delay_ns(ro_freq, stages=RO_STAGES)
-        
-        # Regional RO drift simulation
-        ro_r1 = ro_freq + 0.3 - 2.0 * deg + np.random.normal(0, 0.3)
-        ro_r2 = ro_freq - 0.2 - 2.5 * deg + np.random.normal(0, 0.3)
-        ro_r3 = ro_freq + 0.1 - 1.8 * deg + np.random.normal(0, 0.3)
-        ro_r4 = ro_freq - 0.1 - 3.0 * deg + np.random.normal(0, 0.3)
+        err_rate = max(0.0, _hr.scenario_error_rate(deg) + np.random.normal(0, 0.00002))
 
-        base_err = 0.00001 + 0.003 * deg
-        err_rate = max(0.0, base_err + np.random.normal(0, 0.00015))
-
-        return {
+        out = {
             "Timestamp": time.time(),
             "Temperature": round(temp, 2),
             "VCCINT": round(vccint, 4),
@@ -266,17 +270,12 @@ class LiveSimulationDataSource:
             "VCCBRAM": round(vccbram, 4),
             "RO_Frequency": round(ro_freq, 2),
             "RO_Delay_ns": round(ro_delay, 4),
-            "RO_R1": round(ro_r1, 2),
-            "RO_R1_Delay_ns": round(calculate_ro_delay_ns(ro_r1, stages=RO_STAGES), 4),
-            "RO_R2": round(ro_r2, 2),
-            "RO_R2_Delay_ns": round(calculate_ro_delay_ns(ro_r2, stages=RO_STAGES), 4),
-            "RO_R3": round(ro_r3, 2),
-            "RO_R3_Delay_ns": round(calculate_ro_delay_ns(ro_r3, stages=RO_STAGES), 4),
-            "RO_R4": round(ro_r4, 2),
-            "RO_R4_Delay_ns": round(calculate_ro_delay_ns(ro_r4, stages=RO_STAGES), 4),
-            "Error_Rate": round(err_rate, 6)
         }
-
+        for r, f in regions.items():
+            out[f"RO_{r}"] = round(f, 2)
+            out[f"RO_{r}_Delay_ns"] = round(calculate_ro_delay_ns(f, stages=RO_STAGES), 4)
+        out["Error_Rate"] = round(err_rate, 6)
+        return out
     def step(self, degradation: float = 0.0):
         new_meas = self._generate_step(degradation)
         self.buffer.append(new_meas)
@@ -544,15 +543,15 @@ class EstimatedDataSource:
         "VCCAUX": 1.800,
         "VCCBRAM": 1.000,
         "RO_Frequency": _NOM,
-        "RO_Delay_ns": 0.2294,
+        "RO_Delay_ns": round(100.0 / _NOM, 4),
         "RO_R1": _nom("R1"),
-        "RO_R1_Delay_ns": 0.2294,
+        "RO_R1_Delay_ns": round(100.0 / _nom("R1"), 4),
         "RO_R2": _nom("R2"),
-        "RO_R2_Delay_ns": 0.2294,
+        "RO_R2_Delay_ns": round(100.0 / _nom("R2"), 4),
         "RO_R3": _nom("R3"),
-        "RO_R3_Delay_ns": 0.2294,
+        "RO_R3_Delay_ns": round(100.0 / _nom("R3"), 4),
         "RO_R4": _nom("R4"),
-        "RO_R4_Delay_ns": 0.2294,
+        "RO_R4_Delay_ns": round(100.0 / _nom("R4"), 4),
         "Error_Rate": 0.00001
     }
 
@@ -699,10 +698,12 @@ class EstimatedDataSource:
             assumed.append("Error_Rate")
 
         # Regional RO derivation from RO_Frequency
-        ro_r1 = ro_freq + 0.3
-        ro_r2 = ro_freq - 0.2
-        ro_r3 = ro_freq + 0.1
-        ro_r4 = ro_freq - 0.1
+        # Regions: the same small spatial offsets as before, each scaled to ITS OWN nominal, so a
+        # frequency entered at the board's nominal reads as "no drift" in every region.
+        ro_r1 = (ro_freq + 0.3) * (_nom("R1") / _NOM)
+        ro_r2 = (ro_freq - 0.2) * (_nom("R2") / _NOM)
+        ro_r3 = (ro_freq + 0.1) * (_nom("R3") / _NOM)
+        ro_r4 = (ro_freq - 0.1) * (_nom("R4") / _NOM)
 
         current_frame = {
             "Timestamp": time.time(),
