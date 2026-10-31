@@ -1,8 +1,7 @@
 # ==============================================================================
-# Vivado Implementation Pre-Opt Hook Script
+# Vivado Implementation Pre-Opt Hook Script (project flow)
 # Target: Digilent Basys 3 (XC7A35T)
-# Purpose: Allow intentional combinatorial feedback loops for Ring Oscillators
+# Purpose: ring-oscillator constraints (allowed loops, RO clocks) - the SAME script the batch
+#          build uses, so the two flows cannot disagree.
 # ==============================================================================
-catch { set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets -hierarchical *stage*out*] }
-catch { set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets -hierarchical -quiet *ro*clk*] }
-catch { set_property SEVERITY {Warning} [get_drc_checks LUTLP-1] }
+source [file join [file dirname [file normalize [info script]]] .. ro_constraints.tcl]

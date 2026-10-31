@@ -18,6 +18,7 @@ Physically Honest Fault Model:
 import textwrap
 from typing import List, Dict, Any, Optional
 from config import calculate_ro_delay_ns, RO_STAGES
+import health_rules
 from dashboard.config import (
     HEALTH_COLORS,
     STATUS_BG_COLORS,
@@ -99,9 +100,9 @@ def calculate_aggregate_risk_score(
     base_scores = {"Healthy": 0.15, "Warning": 0.50, "Degraded": 0.85, "Critical": 0.95}
     score = base_scores.get(health_pred, 0.15)
 
-    temp_factor = min(1.0, max(0.0, (temp - 35.0) / 20.0))
-    ro_factor = min(1.0, max(0.0, abs(min(0.0, ro_freq_shift_pct)) / 6.5))
-    err_factor = min(1.0, max(0.0, error_rate / 0.003))
+    temp_factor = min(1.0, max(0.0, (temp - 35.0) / (health_rules.TEMP_CRIT_C - 35.0)))
+    ro_factor = min(1.0, max(0.0, abs(min(0.0, ro_freq_shift_pct)) / (1.2 * health_rules.RO_CRIT_DROP_PCT)))
+    err_factor = min(1.0, max(0.0, error_rate / (1.5 * health_rules.ERROR_RATE_CRIT)))
 
     composite_risk = (
         0.45 * score +

@@ -464,7 +464,7 @@ class LiveUARTDataSource:
             "VCCBRAM": "MEASURED" if has_real_data else "UNAVAILABLE",
             "RO_Frequency": "MEASURED" if has_real_data else "UNAVAILABLE",
             "RO_Delay_ns": "DERIVED" if has_real_data else "UNAVAILABLE",
-            "Error_Rate": "MEASURED" if has_real_data else "UNAVAILABLE"
+            "Error_Rate": "SIMULATED" if has_real_data else "UNAVAILABLE"      # the board has no error counter
         }
         for r in ["RO_R1", "RO_R2", "RO_R3", "RO_R4"]:
             prov_map[r] = "MEASURED" if (has_real_data and r in latest_sample) else "UNAVAILABLE"
@@ -487,6 +487,9 @@ class LiveUARTDataSource:
             "source_type": "LIVE_UART",
             "source_label": f"LIVE UART ({self.receiver.port})",
             "has_real_data": has_real_data,
+            "is_stale": self.receiver.is_stale,
+            "data_age_s": self.receiver.data_age_s,
+            "build_id": self.receiver.last_build_id,
             "is_streaming": self.receiver.is_streaming,
             "is_port_open": self.receiver.is_port_open,
             "is_connected": self.receiver.is_connected,

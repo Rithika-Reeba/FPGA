@@ -52,7 +52,8 @@ class TestHexPipeline(unittest.TestCase):
         baselines = {"RO_R1": 436.4, "RO_R2": 435.8, "RO_R3": 436.1, "RO_R4": 435.9}
         a = evaluate_engineering_limits(d, provenance_map=d["Provenance"], regional_baselines=baselines)
         self.assertIn("R1", a.degraded_pblocks)
-        self.assertEqual(a.max_severity, LimitSeverity.NORMAL)       # one bad region: quorum of 2 not met
+        # one bad region does not meet the quorum of 2, but a dead sensor is a fault, never Healthy
+        self.assertEqual(a.max_severity, LimitSeverity.WARNING)
 
 
 if __name__ == "__main__":

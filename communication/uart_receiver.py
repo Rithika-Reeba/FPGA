@@ -71,6 +71,7 @@ class FPGAUARTReceiver:
         self.handshake_detected: bool = False
         self.handshake_message: str = ""
         self.connection_start_time: float = 0.0
+        self.last_build_id: Optional[str] = None      # V= field of the newest telemetry packet
 
         # Rolling packet rate estimation
         self._recent_timestamps: List[float] = []
@@ -90,6 +91,16 @@ class FPGAUARTReceiver:
             and self.packet_count > 0
             and (now - self.last_packet_time) <= self.stale_threshold_sec
         )
+
+    @property
+    def is_stale(self) -> bool:
+        """True when telemetry HAS arrived on this connection but nothing new for longer than the threshold."""
+        return self.packet_count > 0 and self.last_packet_time > 0 and \
+            (time.time() - self.last_packet_time) > self.stale_threshold_sec
+
+    @property
+    def data_age_s(self) -> float:
+        return (time.time() - self.last_packet_time) if self.last_packet_time > 0 else 0.0
 
     @property
     def is_connected(self) -> bool:
@@ -533,11 +544,11 @@ class FPGAUARTReceiver:
 
                 # 1. Check for HELLO FPGA Handshake message
                 if "HELLO FPGA" in raw_line.upper():
+                    # The link-test greeting carries NO readings: it must not count as telemetry
+                    # (otherwise the stream looks alive while nothing is being measured).
                     self.handshake_detected = True
                     self.handshake_message = raw_line
-                    self.last_packet_time = now
-                    self.state = ConnectionState.RECEIVING_TELEMETRY
-                    self.last_error_msg = ""
+                    self.last_error_msg = "Board is in HELLO link-test mode (sw[0] is up): no readings are sent."
                     return {
                         "packet_type": "HANDSHAKE",
                         "message": raw_line,
@@ -653,6 +664,7 @@ class FPGAUARTReceiver:
         p = parse_hex_line(line)
         if p is None:
             return None
+        self.last_build_id = p.get("build_id")
 
         regions = ("R1", "R2", "R3", "R4")
         freqs = {r: (p["freq_mhz"][r] if p["alive"][r] else 0.0) for r in regions}
@@ -662,11 +674,10 @@ class FPGAUARTReceiver:
         weight = sum(health_rules.REGION_WEIGHTS[r] for r in running)
         ro_freq = (sum(health_rules.REGION_WEIGHTS[r] * freqs[r] for r in running) / weight) if weight else 0.0
 
+        # Out-of-range readings are NOT dropped (that would leave the last healthy reading on
+        # screen while, say, VCCINT collapses): they go on to the engineering limits, which flag
+        # physically impossible values as invalid / degraded.
         temp, vccint, vccaux, vccbram = p["temp_c"], p["VCCINT"], p["VCCAUX"], p["VCCBRAM"]
-        if not (0.0 <= temp <= 125.0 and 0.5 <= vccint <= 1.5 and 1.0 <= vccaux <= 2.5 and 0.5 <= vccbram <= 1.5):
-            return None
-        if any(f > 800.0 for f in freqs.values()):
-            return None
 
         out: Dict[str, Any] = {
             "Timestamp": time.time(),

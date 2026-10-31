@@ -38,15 +38,16 @@ if {[llength $rtl_files] > 0} {
 
 # Set Top Module
 set_property top fpga_health_top [current_fileset]
+# Build ID sent in every telemetry packet (V=): a baseline is tied to it, so it must change per build.
+set build_id [expr {([clock seconds] % 65534) + 1}]
+set_property generic "BUILD_ID=$build_id" [current_fileset]
+puts "--> Build ID: [format %04X $build_id]"
 update_compile_order -fileset sources_1
 
 # 3. Add Constraints
 add_files -fileset constrs_1 "$repo_root/hardware/constraints/basys3.xdc"
-add_files -fileset constrs_1 "$repo_root/hardware/constraints/four_region_floorplan.xdc"
-
-# Set floorplan constraints to be used only in implementation
-set_property USED_IN_SYNTHESIS false [get_files "$repo_root/hardware/constraints/four_region_floorplan.xdc"]
-set_property USED_IN_IMPLEMENTATION true [get_files "$repo_root/hardware/constraints/four_region_floorplan.xdc"]
+# The four-region floorplan is applied by hooks/pre_place.tcl (hard Pblocks + pinned oscillators); the
+# old four_region_floorplan.xdc was removed because it duplicated it without the oscillator pinning.
 
 # 4. Add Simulation Files
 if {[file exists "$repo_root/hardware/sim/tb_fpga_health_top.v"]} {
@@ -68,6 +69,12 @@ if {[file exists $hook_opt]} {
 if {[file exists $hook_bit]} {
     add_files -fileset utils_1 $hook_bit
     set_property STEPS.WRITE_BITSTREAM.TCL.PRE $hook_bit [get_runs impl_1]
+}
+
+set hook_place "$repo_root/hardware/vivado/hooks/pre_place.tcl"
+if {[file exists $hook_place]} {
+    add_files -fileset utils_1 $hook_place
+    set_property STEPS.PLACE_DESIGN.TCL.PRE $hook_place [get_runs impl_1]
 }
 
 # 6. Configure Synthesis Runs

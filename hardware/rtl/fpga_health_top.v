@@ -112,6 +112,7 @@ module fpga_health_top #(
     localparam [11:0] T_WARN      = 12'd2708;   // ~60 degC
     localparam [11:0] T_DEG       = 12'd2789;   // ~70 degC
     localparam [11:0] T_STRESS_ON = 12'd2748;   // stress may resume below ~65 degC
+    localparam [11:0] T_CAL_MAX   = 12'd2594;   // btnU calibrates only below ~46 degC
 
     localparam [11:0] VI_WARN_LO = 12'd1297, VI_WARN_HI = 12'd1433;   // 1.0 V +/-5 %
     localparam [11:0] VI_DEG_LO  = 12'd1229, VI_DEG_HI  = 12'd1501;   // 1.0 V +/-10 %
@@ -163,7 +164,9 @@ module fpga_health_top #(
     always @(posedge clk) begin
         if (rst) begin
             calibrated <= 1'b0;
-        end else if (cal_req && (&alive) && sensors_ready) begin
+        end else if (cal_req && (&alive) && sensors_ready && temp_code < T_CAL_MAX && (sw_s1 == 4'd0)) begin
+            // refused while hot, while a stress switch is up, or while any oscillator is dead:
+            // a hot or stressed board must never be recorded as the healthy reference
             base1 <= cnt1;
             base2 <= cnt2;
             base3 <= cnt3;
@@ -217,9 +220,12 @@ module fpga_health_top #(
     wire       region_warn   = region_quorum && (n_deg  == 3'd0) && (n_warn != 3'd0);
 
     wire any_uncal = (rv1 == 2'd0) | (rv2 == 2'd0) | (rv3 == 2'd0) | (rv4 == 2'd0) | (sv == 2'd0);
-    wire [1:0] verdict = (region_deg  || sv == 2'd3) ? 2'd3 :
-                         (region_warn || sv == 2'd2) ? 2'd2 :
-                         any_uncal                   ? 2'd0 : 2'd1;
+    // A dead oscillator is a SENSOR FAULT, never evidence of health: the quorum must not outvote it,
+    // so the overall state is at least Warning (Degraded still needs the quorum or a sensor limit).
+    wire sensor_fault = ~(&alive);
+    wire [1:0] verdict = (region_deg  || sv == 2'd3)                 ? 2'd3 :
+                         (region_warn || sv == 2'd2 || sensor_fault) ? 2'd2 :
+                         any_uncal                                     ? 2'd0 : 2'd1;
 
     // -------------------------------------------------------------------------
     // UART telemetry
@@ -236,7 +242,7 @@ module fpga_health_top #(
         .i_mode_select(sw[0]),
         .i_cnt1(cnt1), .i_cnt2(cnt2), .i_cnt3(cnt3), .i_cnt4(cnt4),
         .i_alive(alive),
-        .i_stress(stress_en),
+        .i_stress(sw_s1),            // switch positions (the LEDs show whether the heaters really run)
         .i_temp(temp_code),
         .i_vccint(vccint_code),
         .i_vccaux(vccaux_code),

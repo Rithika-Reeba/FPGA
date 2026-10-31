@@ -122,6 +122,14 @@ def classify(reading, cal):
     elif n_deg + n_warn:
         reasons.append(f"isolated region fault (quorum is {rules.REGION_QUORUM}); overall state unchanged")
 
+    # A region whose oscillator is not measuring is a sensor fault, never evidence of health: the
+    # quorum must not outvote it, so the overall state is at least Warning.
+    dead = [r for r in REGIONS if not reading["alive"][r]]
+    if dead:
+        reasons.append(f"sensor fault: ring oscillator not measuring in {', '.join(dead)}")
+        if region_overall == HEALTHY:
+            region_overall = WARNING
+
     if DEGRADED in (region_overall, sensor):
         overall = DEGRADED
     elif WARNING in (region_overall, sensor):
@@ -171,7 +179,7 @@ def selftest():
     assert classify(slower, cal)[0] == DEGRADED
     dead = dict(r, alive=dict(r["alive"], R2=False), freq_mhz=dict(r["freq_mhz"], R2=0.0))
     state, regions, _ = classify(dead, cal)
-    assert regions["R2"] == DEGRADED and state == HEALTHY          # one dead region: quorum not met
+    assert regions["R2"] == DEGRADED and state == WARNING          # one dead region: a sensor fault, never Healthy
     dead2 = dict(dead, alive=dict(dead["alive"], R3=False), freq_mhz=dict(dead["freq_mhz"], R3=0.0))
     assert classify(dead2, cal)[0] == DEGRADED                      # two dead regions: quorum met
     assert parse_line("garbage") is None

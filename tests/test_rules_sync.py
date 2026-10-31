@@ -37,6 +37,7 @@ class TestRtlMatchesRules(unittest.TestCase):
         self.assertCodeNear("T_WARN", rules.temp_code(rules.TEMP_WARN_C))
         self.assertCodeNear("T_DEG", rules.temp_code(rules.TEMP_CRIT_C))
         self.assertCodeNear("T_STRESS_ON", rules.temp_code(rules.TEMP_STRESS_RESUME_C))
+        self.assertCodeNear("T_CAL_MAX", rules.temp_code(rules.TEMP_AUTOCAL_MAX_C))
 
     def test_vccint_and_vccbram_codes(self):
         lim = rules.volt_limits("VCCINT")

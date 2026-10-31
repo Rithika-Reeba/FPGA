@@ -190,7 +190,7 @@ module tb_fpga_health_top;
         show_line;
         check(f_f(0) == 24'hE,               "only R1 reported dead (F=E)");
 
-        check(f_h(0) == 24'h1,               "overall stays healthy (quorum of 2 not met)");
+        check(f_h(0) == 24'h2,               "one dead oscillator = sensor fault: at least Warning, never Healthy");
 
         $display("== Phase 6: quorum - two dead regions change the overall state ==");
         force dut.u_region2.ro_clk = 1'b0;         // R2's oscillator stops as well
@@ -214,6 +214,22 @@ module tb_fpga_health_top;
         sw[12] = 1'b0;
         wait_lines(2);
         check(led[5]  == 1'b0,               "sw5 off -> led5 off");
+        $display("== Phase 8: btnU refuses to calibrate while a stress switch is up ==");
+        #1000 btnC = 1'b1;
+        #200  btnC = 1'b0;                          // reset: not calibrated again
+        wait_lines(3);
+        sw[13] = 1'b1;                              // stress switch up
+        wait_lines(3);
+        #1000 btnU = 1'b1;
+        #200  btnU = 1'b0;
+        wait_lines(3);
+        check(f_h(0) == 24'h0,               "btnU refused while a stress switch is up (still not calibrated)");
+        sw[13] = 1'b0;
+        wait_lines(3);
+        #1000 btnU = 1'b1;
+        #200  btnU = 1'b0;
+        wait_lines(3);
+        check(f_h(0) == 24'h1,               "btnU calibrates once the switch is down");
 
         $display("");
         if (errors == 0) $display("ALL TESTS PASSED");
@@ -223,7 +239,7 @@ module tb_fpga_health_top;
 
     // watchdog
     initial begin
-        #80000000;
+        #120000000;
         $display("FAIL: simulation timeout (lines received: %0d)", line_count);
         $finish;
     end

@@ -82,7 +82,7 @@ module frequency_counter #(
 
     // "start" is registered: it clears 24 counter flops, and decoding the FSM state straight
     // into that fan-out was the slowest path in the oscillator domain. The one-cycle delay
-    // shifts every measurement by exactly one edge (about 0.00002 %), which is negligible.
+    // shifts every measurement by 2 RO edges (one prescaled edge, counts are doubled): about 0.00005 %, negligible.
     wire start_pre = (st == ST_IDLE) && g2 && !g3;
     reg  start = 1'b0;
     wire stop  = (st == ST_COUNT) && !g2 && g3;

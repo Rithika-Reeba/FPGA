@@ -169,9 +169,9 @@ def analyze_indicators(state: FPGAState) -> FPGAState:
         indicators.append(f"Supply voltage rails (VCCINT, VCCAUX, VCCBRAM) are stable within ±5% recommended operating tolerance.")
 
     # 4. Functional Reliability & Error Rates
-    if error_rate >= 0.002:
+    if error_rate >= rules.ERROR_RATE_CRIT:
         indicators.append(f"Functional error rate is critically elevated at {error_rate:.5f}, representing operational stress.")
-    elif error_rate >= 0.0005:
+    elif error_rate >= rules.ERROR_RATE_WARN:
         indicators.append(f"Minor increase in functional error rate: {error_rate:.5f}.")
     else:
         indicators.append(f"Functional error rate is negligible ({error_rate:.5f}).")
@@ -231,7 +231,7 @@ def assess_risk(state: FPGAState) -> FPGAState:
     conf = state.get("confidence", 0.0)
 
     # Risk evaluation hierarchy
-    if health == "Degraded" and (temp > _TEMP_CRIT or error_rate > 0.0025 or ro_freq_shift < -1.1 * _RO_CRIT_DROP):
+    if health == "Degraded" and (temp > _TEMP_CRIT or error_rate > rules.ERROR_RATE_CRIT or ro_freq_shift < -1.1 * _RO_CRIT_DROP):
         risk = "CRITICAL"
     elif health == "Degraded":
         risk = "HIGH"
@@ -266,12 +266,12 @@ def formulate_recommendations(state: FPGAState) -> FPGAState:
     actions: Dict[str, str] = {}
 
     # 1. Thermal Actions
-    if temp >= 50.0:
+    if temp >= _TEMP_WARN:
         actions["Thermal"] = (
             "Investigate elevated operating temperature immediately. Inspect cooling heatsink contact, "
             "verify chassis airflow, and reduce ambient thermal buildup."
         )
-    elif temp >= 42.0:
+    elif temp >= rules.TEMP_AUTOCAL_MAX_C:
         actions["Thermal"] = (
             "Monitor thermal dissipation trends and ensure adequate ventilation around the FPGA enclosure."
         )
@@ -279,12 +279,12 @@ def formulate_recommendations(state: FPGAState) -> FPGAState:
         actions["Thermal"] = "Maintain current thermal cooling and ambient monitoring."
 
     # 2. Timing Actions
-    if ro_freq_shift <= -4.0:
+    if ro_freq_shift <= -_RO_CRIT_DROP:
         actions["Timing"] = (
             "Review critical path timing margins in synthesis constraints. As gate propagation delay increases, "
             "timing slack diminishes; consider re-evaluating setup/hold margins."
         )
-    elif ro_freq_shift <= -2.0:
+    elif ro_freq_shift <= -_RO_WARN_DROP:
         actions["Timing"] = "Track RO delay trends closely to detect any progressive timing degradation."
     else:
         actions["Timing"] = "Timing margins are nominal; continue standard periodic verification."
@@ -296,7 +296,7 @@ def formulate_recommendations(state: FPGAState) -> FPGAState:
     )
 
     # 4. Reliability Actions
-    if error_rate >= 0.001:
+    if error_rate >= rules.ERROR_RATE_WARN:
         actions["Reliability"] = (
             "Increase functional diagnostic test frequency to isolate any intermittent logic faults or memory bit flips."
         )

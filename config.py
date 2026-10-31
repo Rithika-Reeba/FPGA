@@ -44,7 +44,7 @@ RO_DELAY_OPERATING_MAX_NS: float = round(100.0 / RO_FREQ_OPERATING_MIN_MHZ, 4)  
 RO_DELAY_WARNING_LOW_NS: float = round(100.0 / RO_FREQ_WARNING_HIGH_MHZ, 4)     # 0.2237 ns
 RO_DELAY_WARNING_HIGH_NS: float = round(100.0 / RO_FREQ_WARNING_LOW_MHZ, 4)    # 0.2364 ns
 RO_DELAY_CRITICAL_LOW_NS: float = round(100.0 / RO_FREQ_CRITICAL_HIGH_MHZ, 4)   # 0.2174 ns
-RO_DELAY_CRITICAL_HIGH_NS: float = round(100.0 / RO_FREQ_CRITICAL_LOW_MHZ, 4)  # 0.2427 ns
+RO_DELAY_CRITICAL_HIGH_NS: float = round(100.0 / RO_FREQ_CRITICAL_LOW_MHZ, 4)
 
 
 # ============================================================

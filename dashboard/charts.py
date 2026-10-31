@@ -257,7 +257,7 @@ def create_ro_frequency_chart(
         opacity=0.8
     ).encode(y=alt.Y("y:Q", scale=scale))
 
-    # Warning threshold reference line (e.g. 422.9 MHz)
+    # Warning threshold reference line (from health_rules.py)
     warn_df = pd.DataFrame({"y": [warning_freq]})
     warn_rule = alt.Chart(warn_df).mark_rule(clip=True, color="#FFB300",
         strokeDash=[4, 4],
@@ -265,7 +265,7 @@ def create_ro_frequency_chart(
         opacity=0.7
     ).encode(y=alt.Y("y:Q", scale=scale))
 
-    # Critical threshold reference line (e.g. 412.0 MHz)
+    # Critical threshold reference line (from health_rules.py)
     crit_df = pd.DataFrame({"y": [critical_freq]})
     crit_rule = alt.Chart(crit_df).mark_rule(clip=True, color="#FF1744",
         strokeDash=[4, 4],
@@ -329,7 +329,7 @@ def create_ro_delay_chart(
         opacity=0.8
     ).encode(y=alt.Y("y:Q", scale=scale))
 
-    # Warning threshold reference line (e.g. 0.2365 ns)
+    # Warning delay reference line (from health_rules.py)
     warn_df = pd.DataFrame({"y": [warning_delay]})
     warn_rule = alt.Chart(warn_df).mark_rule(
         color="#FFB300",
@@ -338,7 +338,7 @@ def create_ro_delay_chart(
         opacity=0.7
     ).encode(y=alt.Y("y:Q", scale=scale))
 
-    # Critical threshold reference line (e.g. 0.2427 ns)
+    # Critical delay reference line (from health_rules.py)
     crit_df = pd.DataFrame({"y": [critical_delay]})
     crit_rule = alt.Chart(crit_df).mark_rule(
         color="#FF1744",

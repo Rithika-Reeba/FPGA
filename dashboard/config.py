@@ -304,10 +304,10 @@ REGIONAL_CONFIG: Dict[str, Dict[str, Any]] = {
         "nominal_delay_ns": 0.2294,  # 100 / 436.0
         "warning_drop_pct": 3.0,
         "critical_drop_pct": 5.5,
-        "warning_freq": 422.9,       # 436.0 * 0.970
-        "warning_delay_ns": 0.2365,  # 100 / 422.9
-        "critical_freq": 412.0,      # 436.0 * 0.945
-        "critical_delay_ns": 0.2427, # 100 / 412.0
+        "warning_freq": 0.0,         # set from health_rules.py by _apply_health_rules()
+        "warning_delay_ns": 0.0,     # set from health_rules.py
+        "critical_freq": 0.0,        # set from health_rules.py
+        "critical_delay_ns": 0.0,    # set from health_rules.py
         "description": "Monitors logic timing propagation in pblock_R1 (CLOCKREGION_X0Y2)"
     },
     "R2": {
@@ -324,10 +324,10 @@ REGIONAL_CONFIG: Dict[str, Dict[str, Any]] = {
         "nominal_delay_ns": 0.2294,  # 100 / 436.0
         "warning_drop_pct": 3.0,
         "critical_drop_pct": 5.5,
-        "warning_freq": 422.9,       # 436.0 * 0.970
-        "warning_delay_ns": 0.2365,  # 100 / 422.9
-        "critical_freq": 412.0,      # 436.0 * 0.945
-        "critical_delay_ns": 0.2427, # 100 / 412.0
+        "warning_freq": 0.0,         # set from health_rules.py by _apply_health_rules()
+        "warning_delay_ns": 0.0,     # set from health_rules.py
+        "critical_freq": 0.0,        # set from health_rules.py
+        "critical_delay_ns": 0.0,    # set from health_rules.py
         "description": "Monitors logic timing propagation in pblock_R2 (CLOCKREGION_X1Y2)"
     },
     "R3": {
@@ -344,10 +344,10 @@ REGIONAL_CONFIG: Dict[str, Dict[str, Any]] = {
         "nominal_delay_ns": 0.2294,  # 100 / 436.0
         "warning_drop_pct": 3.0,
         "critical_drop_pct": 5.5,
-        "warning_freq": 422.9,       # 436.0 * 0.970
-        "warning_delay_ns": 0.2365,  # 100 / 422.9
-        "critical_freq": 412.0,      # 436.0 * 0.945
-        "critical_delay_ns": 0.2427, # 100 / 412.0
+        "warning_freq": 0.0,         # set from health_rules.py by _apply_health_rules()
+        "warning_delay_ns": 0.0,     # set from health_rules.py
+        "critical_freq": 0.0,        # set from health_rules.py
+        "critical_delay_ns": 0.0,    # set from health_rules.py
         "description": "Monitors logic timing propagation in pblock_R3 (CLOCKREGION_X0Y0)"
     },
     "R4": {
@@ -364,10 +364,10 @@ REGIONAL_CONFIG: Dict[str, Dict[str, Any]] = {
         "nominal_delay_ns": 0.2294,  # 100 / 436.0
         "warning_drop_pct": 3.0,
         "critical_drop_pct": 5.5,
-        "warning_freq": 422.9,       # 436.0 * 0.970
-        "warning_delay_ns": 0.2365,  # 100 / 422.9
-        "critical_freq": 412.0,      # 436.0 * 0.945
-        "critical_delay_ns": 0.2427, # 100 / 412.0
+        "warning_freq": 0.0,         # set from health_rules.py by _apply_health_rules()
+        "warning_delay_ns": 0.0,     # set from health_rules.py
+        "critical_freq": 0.0,        # set from health_rules.py
+        "critical_delay_ns": 0.0,    # set from health_rules.py
         "description": "Monitors logic timing propagation in pblock_R4 (CLOCKREGION_X1Y0)"
     }
 }
@@ -648,11 +648,11 @@ def calibrate_history_dataframe(
          - Computes weighted RO frequency series using validated structural weights:
              w_freq = sum(w[i] * RO_R[i]) / sum(w[i])
          - For each sample row, checks quorum:
-             degraded_pblocks: regions with RO_R[i] <= critical_freq (412.0 MHz)
-             warning_pblocks: regions with 412.0 MHz < RO_R[i] <= warning_freq (422.9 MHz)
+             degraded_pblocks: regions with RO_R[i] <= their own critical_freq (health_rules.py)
+             warning_pblocks: regions between their own critical_freq and warning_freq
              total_degrading = degraded_count + warning_count
          - Quorum Policy:
-             * If total_degrading >= 2: Multi-pblock degradation triggers overall degradation.
+             * If total_degrading >= REGION_QUORUM: Multi-pblock degradation triggers overall degradation.
                The main 'RO_Frequency' changes to reflect the degraded condition (raw hardware mean).
              * If total_degrading < 2 (isolated single-pblock anomaly like R2):
                The main 'RO_Frequency' is governed by the calibrated weighted RO frequency (nominal / Healthy).
@@ -680,10 +680,10 @@ def calibrate_history_dataframe(
 
     # Resolve weights
     is_valid_w, weights_used, _ = validate_regional_weights(weights, expected_regions=reg_keys)
-    w1 = weights_used.get("R1", 0.35)
-    w2 = weights_used.get("R2", 0.05)
-    w3 = weights_used.get("R3", 0.30)
-    w4 = weights_used.get("R4", 0.30)
+    w1 = weights_used.get("R1", DEFAULT_REGIONAL_WEIGHTS["R1"])
+    w2 = weights_used.get("R2", DEFAULT_REGIONAL_WEIGHTS["R2"])
+    w3 = weights_used.get("R3", DEFAULT_REGIONAL_WEIGHTS["R3"])
+    w4 = weights_used.get("R4", DEFAULT_REGIONAL_WEIGHTS["R4"])
     tot_w = w1 + w2 + w3 + w4
     if tot_w <= 0:
         tot_w = 1.0
@@ -701,31 +701,30 @@ def calibrate_history_dataframe(
     ) / tot_w
     calibrated["RO_Weighted_Frequency"] = weighted_series.round(2)
 
-    # Thresholds for quorum policy (412.0 MHz critical, 422.9 MHz warning)
-    crit_limit = 412.0
-    warn_limit = 422.9
-
-    # Quorum calculation per row: count how many regions are degrading
-    degraded_count = (
-        (calibrated["RO_R1"] <= crit_limit).astype(int) +
-        (calibrated["RO_R2"] <= crit_limit).astype(int) +
-        (calibrated["RO_R3"] <= crit_limit).astype(int) +
-        (calibrated["RO_R4"] <= crit_limit).astype(int)
-    )
-    warning_count = (
-        ((calibrated["RO_R1"] > crit_limit) & (calibrated["RO_R1"] <= warn_limit)).astype(int) +
-        ((calibrated["RO_R2"] > crit_limit) & (calibrated["RO_R2"] <= warn_limit)).astype(int) +
-        ((calibrated["RO_R3"] > crit_limit) & (calibrated["RO_R3"] <= warn_limit)).astype(int) +
-        ((calibrated["RO_R4"] > crit_limit) & (calibrated["RO_R4"] <= warn_limit)).astype(int)
-    )
+    # Quorum policy with each region judged against ITS OWN limits (single source of truth)
+    degraded_count = 0
+    warning_count = 0
+    for _r in reg_keys:
+        _crit = REGIONAL_CONFIG[_r]["critical_freq"]
+        _warn = REGIONAL_CONFIG[_r]["warning_freq"]
+        _col = calibrated[f"RO_{_r}"]
+        degraded_count = degraded_count + (_col <= _crit).astype(int)
+        warning_count = warning_count + ((_col > _crit) & (_col <= _warn)).astype(int)
     total_degrading = degraded_count + warning_count
-    quorum_triggered = total_degrading >= 2
+    quorum_triggered = total_degrading >= REGION_QUORUM
 
     # Vectorized assignment:
     # If quorum triggered (>= 2 degrading regions): keep raw hardware arithmetic frequency
     # If quorum NOT triggered (< 2 degrading regions, e.g. isolated R2): use weighted frequency
     raw_col = calibrated["RO_Raw_Frequency"] if "RO_Raw_Frequency" in calibrated.columns else calibrated["RO_Frequency"]
-    calibrated["RO_Frequency"] = raw_col.where(quorum_triggered, calibrated["RO_Weighted_Frequency"])
+    # The plain mean and the weighted mean differ once regions have different baselines, so express
+    # the plain mean on the same footing as the (weighted) nominal; a healthy board then reads the
+    # same under both branches and the chart does not jump when the quorum triggers.
+    _arith_nominal = sum(REGIONAL_CONFIG[r]["nominal_freq"] for r in reg_keys) / len(reg_keys)
+    _mean_scale = (_rules.global_nominal_mhz() / _arith_nominal) if _arith_nominal > 0 else 1.0
+    if abs(_mean_scale - 1.0) < 1e-9:
+        _mean_scale = 1.0                  # identical baselines: leave the values untouched
+    calibrated["RO_Frequency"] = (raw_col * _mean_scale).where(quorum_triggered, calibrated["RO_Weighted_Frequency"])
     calibrated["RO_Delay_ns"] = (100.0 / calibrated["RO_Frequency"]).round(4)
 
     # Update differential and rolling features if present
@@ -1680,6 +1679,7 @@ def evaluate_engineering_limits(
     worst_reg_delay = None
     degraded_pblocks: List[str] = []
     warning_pblocks: List[str] = []
+    invalid_regions: List[str] = []      # regions whose oscillator is not measuring (dead / invalid)
 
     if has_regional_data:
         for r_id in ["R1", "R2", "R3", "R4"]:
@@ -1699,6 +1699,8 @@ def evaluate_engineering_limits(
             regional_evals[r_id] = reg_eval
 
             reg_sev = reg_eval["severity"]
+            if reg_sev == LimitSeverity.PHYSICALLY_INVALID:
+                invalid_regions.append(r_id)
             if reg_sev in (LimitSeverity.CRITICAL, LimitSeverity.PHYSICALLY_INVALID):
                 degraded_pblocks.append(r_id)
                 if worst_reg_sev != LimitSeverity.CRITICAL:
@@ -1911,6 +1913,20 @@ def evaluate_engineering_limits(
                 limit_str = f"{cfg_d['warning_high']:.4f} ns"
                 derived_delay_str = f"{val_d:.4f} ns (derived from RO frequency)"
 
+    # A region whose oscillator is not measuring is a SENSOR FAULT, never evidence of health: the
+    # quorum rule must not outvote it, so the overall state is at least Warning.
+    if invalid_regions and max_sev == LimitSeverity.NORMAL:
+        max_sev = LimitSeverity.WARNING
+        has_hard_viol = True
+        fault_reason = f"Sensor fault: ring oscillator not measuring in {', '.join(invalid_regions)}"
+        reasons.append(fault_reason)
+        timing_reasons.append(fault_reason)
+        if primary_channel == "Nominal":
+            primary_reason = fault_reason
+            primary_channel = f"RO_{invalid_regions[0]}"
+            measured_str = "0.0 MHz (no oscillation)"
+            limit_str = "oscillator must run"
+            worst_region = invalid_regions[0]
     return EngineeringAssessment(
         is_input_valid=is_input_valid,
         is_physically_valid=is_phys_valid,

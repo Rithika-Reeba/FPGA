@@ -40,10 +40,8 @@ def detect_board_port() -> Optional[str]:
         import serial.tools.list_ports as lp
     except ImportError:
         return None
-    for p in lp.comports():
-        if p.vid == 0x0403 and p.pid == 0x6010:
-            return p.device
-    return None
+    found = sorted(p.device for p in lp.comports() if p.vid == 0x0403 and p.pid == 0x6010)
+    return found[0] if found else None          # sorted: the same board on every start
 
 
 def list_board_ports() -> List[Tuple[str, Optional[str]]]:

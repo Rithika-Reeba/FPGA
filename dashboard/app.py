@@ -168,7 +168,7 @@ def recalibrate_and_reload(port=None, force=True) -> None:
 # =============================================================================
 # Session State Initialization
 # =============================================================================
-detected_fpga_port = BOARD_PORT or FPGAUARTReceiver.detect_fpga_port()
+detected_fpga_port = BOARD_PORT      # the one shared choice; no "any USB serial port" fallback
 
 if "data_mode" not in st.session_state:
     if detected_fpga_port:
@@ -338,19 +338,13 @@ with st.sidebar:
             if st.button("🔄", help="Rescan serial ports"):
                 st.rerun()
 
-        # Handle port switching cleanly
-        if selected_device != rcv.port and selected_device != "NONE":
-            if rcv.is_port_open:
-                rcv.disconnect()
-            rcv.port = selected_device
-            st.session_state.uart_source.buffer.clear()
-            st.session_state.uart_connect_error = None
-            st.session_state.user_disconnected = False
-            if st.session_state.get("auto_connect", True):
-                ok = st.session_state.uart_source.connect()
-                if not ok:
-                    st.session_state.uart_connect_error = rcv.last_error_msg
-            st.rerun()
+        # Switching port = switching board: the baseline must follow, so only Basys 3 style ports
+        # (Digilent FT2232H) are accepted and the change always goes through the baseline step.
+        if selected_device != BOARD_PORT and selected_device != "NONE":
+            if selected_device in [dev for dev, _ in list_board_ports()]:
+                recalibrate_and_reload(port=selected_device, force=False)
+            else:
+                st.warning(f"`{selected_device}` is not a Basys 3 USB-serial port, so it was not selected.")
 
         st.caption(f"**Target Device**: {DEVICE_NAME} (`{selected_device}`)")
 
@@ -386,25 +380,6 @@ with st.sidebar:
 
         if st.session_state.get("uart_connect_error"):
             st.error(f"⚠️ {st.session_state.uart_connect_error}")
-
-        # Manual Port Input
-        with st.expander("✏️ Manual Port Entry / Custom Port", expanded=False):
-            st.caption("Enter any custom COM port name (e.g. COM11, COM4, /dev/ttyUSB0):")
-            col_m1, col_m2 = st.columns([3, 1])
-            with col_m1:
-                custom_com = st.text_input("Port Name", placeholder="e.g. COM11", label_visibility="collapsed")
-            with col_m2:
-                if st.button("Switch", key="btn_apply_custom_port"):
-                    if custom_com.strip():
-                        new_p = custom_com.strip().upper()
-                        if rcv.is_port_open:
-                            rcv.disconnect()
-                        rcv.port = new_p
-                        st.session_state.uart_source.buffer.clear()
-                        st.session_state.user_disconnected = False
-                        if st.session_state.get("auto_connect", True):
-                            st.session_state.uart_source.connect()
-                        st.rerun()
 
         # Comprehensive System-Wide Port Tracker & Diagnostic Sniffer
         with st.expander("🔍 All COM Ports Diagnostic Tracker", expanded=False):
@@ -449,18 +424,10 @@ with st.sidebar:
                     col_pa, col_pb = st.columns(2)
                     with col_pa:
                         if not p_cur:
-                            if st.button(f"🔌 Use {p_name}", key=f"track_btn_use_{p_name}"):
-                                if rcv.is_port_open:
-                                    rcv.disconnect()
-                                rcv.port = p_name
-                                st.session_state.uart_source.buffer.clear()
-                                st.session_state.user_disconnected = False
-                                ok = st.session_state.uart_source.connect()
-                                if not ok:
-                                    st.session_state.uart_connect_error = rcv.last_error_msg
-                                else:
-                                    st.session_state.uart_connect_error = None
-                                st.rerun()
+                            _is_board = p_name in [dev for dev, _ in list_board_ports()]
+                            if st.button(f"🔌 Use {p_name}", key=f"track_btn_use_{p_name}", disabled=not _is_board,
+                                         help=None if _is_board else "Not a Basys 3 USB-serial port"):
+                                recalibrate_and_reload(port=p_name, force=False)
                         else:
                             st.info("👈 Currently selected")
                     with col_pb:
@@ -476,32 +443,21 @@ with st.sidebar:
 
         with st.expander("⚡ FPGA Hardware Programmer", expanded=False):
             st.markdown("Burn the precompiled health monitor bitstream (Ring Oscillator, XADC, PRBS-7, UART) into the board:")
-            if st.button("🔥 Burn Precompiled Bitstream", width="stretch"):
+            st.caption(f"Programs ONLY the board being monitored (`{BOARD_CAL.get('board_id')}`). "
+                       "The design is lost when the board loses power.")
+            if st.button("🔥 Burn Precompiled Bitstream", width="stretch", disabled=not BOARD_CAL.get("board_id")):
                 with st.spinner("Programming Basys 3 FPGA over JTAG..."):
                     try:
+                        st.session_state.uart_source.disconnect()          # JTAG and UART share the USB chip
                         from hardware.flash_manager import program_health_bitstream
-                        ok, msg = program_health_bitstream()
-                        if ok:
-                            st.success("Bitstream burned successfully! Board is now streaming telemetry.")
-                            st.session_state.uart_source.connect()
-                        else:
-                            st.error(f"Programming failed: {msg}")
+                        ok, msg = program_health_bitstream(board_id=BOARD_CAL.get("board_id"))
                     except Exception as e:
-                        st.error(f"Error: {str(e)}")
-                st.rerun()
-
-            if st.button("↩️ Restore Original Program", width="stretch"):
-                with st.spinner("Restoring original FPGA program..."):
-                    try:
-                        from hardware.flash_manager import restore_original_program
-                        ok, msg = restore_original_program()
-                        if ok:
-                            st.success("Original FPGA program restored.")
-                        else:
-                            st.error(f"Restoration failed: {msg}")
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
-                st.rerun()
+                        ok, msg = False, str(e)
+                if ok:
+                    st.success(msg)
+                    recalibrate_and_reload(port=BOARD_PORT, force=False)   # new build => check/record its baseline
+                else:
+                    st.error(f"Programming failed: {msg}")
 
         with st.expander("🎮 Board Physical Controls", expanded=False):
             st.markdown("""
@@ -646,22 +602,34 @@ try:
         history_df, latest, meta = st.session_state.uart_source.get_data(window_size=150)
         source_badge = f"LIVE UART ({st.session_state.uart_source.receiver.port})"
 
-        # Check if real hardware telemetry is arriving
-        if not meta.get("has_real_data", False):
+        # The board was reprogrammed while the dashboard was running: its baseline belongs to the
+        # previous build. Re-check / record the baseline for the new build (once per build id).
+        _build = meta.get("build_id")
+        if _build and BOARD_CAL.get("build_id") and _build != BOARD_CAL["build_id"] \
+                and st.session_state.get("_rebaselined_for") != _build:
+            st.session_state["_rebaselined_for"] = _build
+            recalibrate_and_reload(port=BOARD_PORT, force=False)
+
+        # Show health only while telemetry is really arriving: no packets yet, a HELLO link test,
+        # or telemetry that went quiet must never leave the last reading on screen as "live".
+        _stale = bool(meta.get("is_stale", False))
+        if not meta.get("has_real_data", False) or _stale:
             rcv = st.session_state.uart_source.receiver
             st.markdown("### 🔌 Basys 3 Hardware Interface Status")
+            if _stale:
+                st.error(
+                    f"🔴 **NO DATA**: no telemetry for {meta.get('data_age_s', 0):.0f} s. "
+                    "The values below are NOT shown because they would be out of date."
+                )
 
             if not rcv.is_port_open:
                 st.error(f"🔴 **Port Disconnected**: {rcv.last_error_msg or 'Serial port is currently closed.'}")
-                st.info("Select the Digilent Basys 3 COM port in the sidebar and click **Connect**, or plug in the board's USB cable.")
+                st.info("Plug in the board's USB cable, then click **Connect to Board**.")
                 col_btn1, col_btn2 = st.columns(2)
                 with col_btn1:
-                    if st.button("⚡ Connect to Detected Port", type="primary", use_container_width=True):
-                        detected = FPGAUARTReceiver.detect_fpga_port()
-                        if detected:
-                            rcv.connect(detected)
-                        else:
-                            rcv.connect()
+                    if st.button("⚡ Connect to Board", type="primary", use_container_width=True):
+                        if BOARD_PORT:
+                            rcv.connect(BOARD_PORT)
                         st.rerun()
                 with col_btn2:
                     if st.button("📊 Switch to Simulation Mode", use_container_width=True):
@@ -671,33 +639,32 @@ try:
                 st.warning(
                     f"🟡 **Connected to `{rcv.port}`, but NO telemetry packets are arriving.**\n\n"
                     f"- **Port:** `{rcv.port}` (115200 8N1)\n"
-                    f"- **Status:** {rcv.last_error_msg or 'Listening for JSON telemetry packets...'}\n\n"
+                    f"- **Status:** {rcv.last_error_msg or 'Listening for telemetry packets...'}\n\n"
                     "**Troubleshooting Checklist:**\n"
-                    "1. **Wrong Port?** If you have Bluetooth or other serial devices, choose the Basys 3 port (e.g. `COM10`) in the sidebar.\n"
-                    "2. **Unprogrammed FPGA?** If you just connected the board, the volatile SRAM is empty. Click **Burn Precompiled Bitstream** below.\n"
-                    "3. **Physical Switch `sw[0]`:** Ensure `sw[0]` (rightmost switch) is DOWN for JSON sensor telemetry."
+                    "1. **Wrong board?** Pick the board in **Board to monitor** (sidebar).\n"
+                    "2. **Unprogrammed FPGA?** The design is lost when the board loses power. Click **Burn Precompiled Bitstream** below.\n"
+                    "3. **Physical Switch `sw[0]`:** it must be DOWN for telemetry (UP is the HELLO link test, which carries no readings)."
                 )
                 col_f1, col_f2, col_f3 = st.columns(3)
                 with col_f1:
-                    if st.button("🔥 Burn Precompiled Bitstream Now", type="primary", use_container_width=True):
-                        with st.spinner("Burning fpga_health_top.bit into Basys 3 FPGA over JTAG..."):
+                    if st.button("🔥 Burn Precompiled Bitstream Now", type="primary", use_container_width=True,
+                                 disabled=not BOARD_CAL.get("board_id")):
+                        with st.spinner("Burning fpga_health_top.bit into the monitored board over JTAG..."):
                             try:
+                                rcv.disconnect()                               # JTAG and UART share the USB chip
                                 from hardware.flash_manager import program_health_bitstream
-                                ok, msg = program_health_bitstream()
-                                if ok:
-                                    st.success("Bitstream burned successfully! Starting telemetry...")
-                                    time.sleep(1)
-                                    rcv.connect()
-                                else:
-                                    st.error(f"Programming failed: {msg}")
+                                ok, msg = program_health_bitstream(board_id=BOARD_CAL.get("board_id"))
                             except Exception as e:
-                                st.error(f"Error: {str(e)}")
-                        st.rerun()
+                                ok, msg = False, str(e)
+                        if ok:
+                            st.success(msg)
+                            recalibrate_and_reload(port=BOARD_PORT, force=False)
+                        else:
+                            st.error(f"Programming failed: {msg}")
                 with col_f2:
-                    if st.button("🔄 Rescan & Reconnect", use_container_width=True):
-                        detected = FPGAUARTReceiver.detect_fpga_port()
-                        if detected:
-                            rcv.connect(detected)
+                    if st.button("🔄 Reconnect", use_container_width=True):
+                        if BOARD_PORT:
+                            rcv.connect(BOARD_PORT)
                         st.rerun()
                 with col_f3:
                     if st.button("📊 Switch to Dynamic Simulation", use_container_width=True):

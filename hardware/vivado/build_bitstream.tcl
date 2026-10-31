@@ -30,40 +30,7 @@ set build_id [expr {([clock seconds] % 65534) + 1}]
 puts "--> Build ID: [format %04X $build_id] (sent in every telemetry packet as V=; baselines are tied to it)"
 synth_design -top fpga_health_top -part xc7a35tcpg236-1 -flatten_hierarchy rebuilt -generic BUILD_ID=$build_id
 
-# Allow intentional combinatorial feedback loop for the Ring Oscillators
-set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets -hierarchical *stage*out*]
-catch { set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets -hierarchical -quiet *ro*clk*] }
-catch { set_property ALLOW_COMBINATORIAL_LOOPS TRUE [get_nets -hierarchical -quiet *g_heater*] }
-
-# Treat each ring-oscillator output as a (fast) clock so STA checks the edge counters,
-# and keep all RO domains asynchronous to the 100 MHz domain and to each other.
-set ro_clks {}
-foreach i {1 2 3 4} {
-    set n [get_nets -quiet -hierarchical -filter "NAME =~ *u_region$i/*stage4_out*"]
-    if {[llength $n] == 0} { puts "WARNING: RO net for region $i not found; its domain stays unconstrained"; continue }
-    set drv [get_pins -quiet -of_objects [lindex $n 0] -filter {DIRECTION == OUT && IS_LEAF}]
-    if {[llength $drv] > 1} { set drv [lindex $drv 0] }
-    # 2.0 ns = 500 MHz: faster than any oscillator measured on the board (about 456 MHz max)
-    if {[catch { create_clock -name ro_clk_r$i -period 2.0 $drv } err]} {
-        puts "WARNING: could not create RO clock for region $i: $err"
-    } else {
-        # the counting logic runs on the divide-by-2 flip-flop, so declare that clock too
-        set div [get_pins -quiet -hierarchical -filter "NAME =~ *u_region$i/*ro_div_reg/Q"]
-        if {[llength $div] == 0} {
-            puts "WARNING: ro_div flip-flop for region $i not found; its divided clock is unconstrained"
-            lappend ro_clks ro_clk_r$i
-        } else {
-            create_generated_clock -name ro_div_r$i -source $drv -divide_by 2 [lindex $div 0]
-            lappend ro_clks "ro_clk_r$i ro_div_r$i"
-        }
-    }
-}
-if {[llength $ro_clks] > 0} {
-    set groups [list -group sys_clk_pin]
-    foreach c $ro_clks { lappend groups -group $c }
-    set_clock_groups -asynchronous {*}$groups
-}
-catch { set_property SEVERITY {Warning} [get_drc_checks LUTLP-1] }
+source $proj_root/vivado/ro_constraints.tcl
 
 write_checkpoint -force $output_dir/post_synth.dcp
 report_utilization -file $output_dir/post_synth_utilization.rpt
@@ -95,6 +62,22 @@ write_checkpoint -force $output_dir/post_opt.dcp
 puts "--> Running Placement (place_design with regional Pblocks)..."
 place_design
 write_checkpoint -force $output_dir/post_place.dcp
+# Every cell of a region must really sit inside that region's Pblock. (A soft Pblock is only a hint:
+# in an earlier build 15-29 % of each region's cells, heaters included, ended up outside it.)
+puts "--> Verifying placement containment..."
+foreach i {1 2 3 4} {
+    set pb [get_pblocks pblock_R$i]
+    set outside 0
+    set total 0
+    foreach c [get_cells -hierarchical -filter "NAME =~ u_region$i/* && IS_PRIMITIVE"] {
+        set loc [get_property LOC $c]
+        if {$loc eq "" || ![string match "SLICE_*" $loc]} { continue }
+        incr total
+        if {![llength [get_sites -quiet -of_objects $pb $loc]]} { incr outside }
+    }
+    puts "    region $i: $total placed slice cells, $outside outside pblock_R$i"
+    if {$outside > 0} { error "BUILD FAILED: $outside cells of region $i were placed outside pblock_R$i" }
+}
 
 # 7. Routing
 puts "--> Running Routing (route_design)..."

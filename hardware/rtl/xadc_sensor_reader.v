@@ -84,7 +84,7 @@ module xadc_sensor_reader (
         .INIT_47(16'h0000),
         .INIT_48(16'h4700),   // temp, VCCINT, VCCAUX, VCCBRAM
         .INIT_49(16'h0000),
-        .INIT_4A(16'h0000),
+        .INIT_4A(16'h4700),   // average temp, VCCINT, VCCAUX, VCCBRAM (16 samples, per INIT_40)
         .INIT_4B(16'h0000),
         .INIT_4C(16'h0000),
         .INIT_4D(16'h0000),

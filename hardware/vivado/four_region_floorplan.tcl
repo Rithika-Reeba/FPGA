@@ -34,6 +34,8 @@ proc create_regional_pblock {pb_name cell_pattern slice_range} {
     resize_pblock [get_pblocks $pb_name] -add $slice_range
     
     # 5. Set Pblock containment
+    # HARD pblock: a soft one (what Vivado produced here by default) lets the placer ignore it
+    set_property IS_SOFT false [get_pblocks $pb_name]
     set_property CONTAIN_ROUTING false [get_pblocks $pb_name]
     set_property EXCLUDE_PLACEMENT false [get_pblocks $pb_name]
     
