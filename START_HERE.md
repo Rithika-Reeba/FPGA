@@ -145,6 +145,8 @@ venv\Scripts\python.exe -m unittest discover tests
 
 Expected: `OK` (146 tests; one is skipped when no board is connected).
 
+To run the **hardware design's testbench** (the RTL simulation) double-click `hardware\sim\run_sim.bat`. It prints `RESULT: PASS` or `FAIL`, and works even when "Run Simulation" inside the Vivado window fails.
+
 ## 6. If something goes wrong
 
 | Symptom | Cause and fix |
