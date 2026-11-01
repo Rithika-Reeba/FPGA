@@ -4,6 +4,8 @@ rem Then in Flow Navigator choose "Open Implemented Design" and look at the Devi
 rem (Vivado's launcher does not accept a project file as an argument on Windows, so the project is opened
 rem  by a small Tcl script instead.)
 cd /d "%~dp0"
+rem Vivado runs the simulation by starting compile.bat by name from its folder; that fails if this variable is set.
+set NoDefaultCurrentDirectoryInExePath=
 if not exist "C:\vivado_projects\fpga_health_project\fpga_health_project.xpr" (
     echo The project is not generated yet. Run:  vivado -mode batch -source hardware\vivado\refresh_project.tcl
     pause
