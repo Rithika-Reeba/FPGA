@@ -742,6 +742,11 @@ try:
                     if st.button("📊 Switch to Simulation Mode", use_container_width=True):
                         st.session_state["_goto_mode"] = "Dynamic Simulation Stream"
                         st.rerun()
+                # A board that drops off USB and comes back must reconnect by itself: try again every 2 s.
+                if st.session_state.get("auto_connect", True) and not st.session_state.get("user_disconnected", False):
+                    st.caption("Trying to reconnect automatically every 2 seconds...")
+                    time.sleep(2)
+                    st.rerun()
             else:
                 st.warning(
                     f"🟡 **Connected to `{rcv.port}`, but NO telemetry packets are arriving.**\n\n"
