@@ -557,7 +557,7 @@ with st.sidebar:
             st.caption(f"Programs ONLY the board being monitored (found automatically from its USB port). "
                        "The design is lost when the board loses power.")
             if st.button(burn_label(), width="stretch", disabled=not BOARD_CAL.get("board_id")):
-                with st.spinner("Programming Basys 3 FPGA over JTAG..."):
+                with st.spinner("Programming the board (temporary: the board's stored program is not touched)..."):
                     try:
                         st.session_state.uart_source.disconnect()          # JTAG and UART share the USB chip
                         ok, msg = burn_selected_design(BOARD_CAL.get("board_id"))
@@ -777,7 +777,7 @@ try:
                 with col_f1:
                     if st.button(burn_label() + " Now", type="primary", use_container_width=True,
                                  disabled=not BOARD_CAL.get("board_id")):
-                        with st.spinner("Burning fpga_health_top.bit into the monitored board over JTAG..."):
+                        with st.spinner("Programming the board (temporary: the board's stored program is not touched)..."):
                             try:
                                 rcv.disconnect()                               # JTAG and UART share the USB chip
                                 ok, msg = burn_selected_design(BOARD_CAL.get("board_id"))
