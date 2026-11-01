@@ -16,11 +16,15 @@ Starting it from a terminal instead:
 
 ```
 cd C:\Users\user\OneDrive\Desktop\FPGA-Project-files\FPGA
-venv\Scripts\python.exe -m streamlit run dashboard/app.py --server.port 8511 --server.address localhost
+venv\Scripts\python.exe run_dashboard.py
 ```
 
-Only one copy may run at a time, and the serial port (`COMx`) can be used by one program at a time.
-If something else is using the board (another dashboard, a script), close it first.
+`run_dashboard.py` (which `start_dashboard.bat` also uses) keeps **one** dashboard running: if another copy is already
+running it is closed first (so it releases the boards' serial ports) and the new one takes over. It only ever closes this
+project's dashboard; if some other program uses port 8511 it says so and stops without touching it
+(use another port with `venv\Scripts\python.exe run_dashboard.py 8512`).
+
+A serial port (`COMx`) can be used by one program at a time. If a script of yours is using the board, close it first.
 
 ## 2. Pick the data source
 
