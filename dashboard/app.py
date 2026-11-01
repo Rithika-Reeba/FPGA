@@ -37,6 +37,24 @@ def _finish_loading() -> None:
     st.session_state["_rendered_mode"] = st.session_state.get("data_mode_select")
 
 
+# ONE active tab, newest first (see dashboard/single_instance.py): a tab that opens takes priority; an older tab
+# pauses itself with a notice instead of fighting over the boards, and can take priority back on purpose.
+from streamlit.runtime.scriptrunner import get_script_run_ctx
+from dashboard import single_instance as _single
+
+_ctx = get_script_run_ctx()
+if "_sid" not in st.session_state:
+    st.session_state["_sid"] = _ctx.session_id if _ctx else "local"
+    _single.claim(st.session_state["_sid"])                     # a NEW tab or window has priority
+if not _single.is_active(st.session_state["_sid"]):
+    _skeleton.empty()
+    st.markdown("### The dashboard is open in another window")
+    st.write("It can only be used in one window at a time. Click **Use here** to use it in this window instead.")
+    if st.button("Use here", type="primary"):
+        _single.claim(st.session_state["_sid"])
+        st.rerun()
+    st.stop()
+
 # Show it on the first load, during a board switch, and whenever another telemetry source is picked
 # (the selector's value is already in session state when the script starts).
 _picked = st.session_state.get("data_mode_select")

@@ -24,6 +24,8 @@ running it is closed first (so it releases the boards' serial ports) and the new
 project's dashboard; if some other program uses port 8511 it says so and stops without touching it
 (use another port with `venv\Scripts\python.exe run_dashboard.py 8512`).
 
+**Only one dashboard window works at a time, like WhatsApp Web.** If you open the dashboard in a second tab or window, the newest one works and the older one pauses with "The dashboard is open in another window" and a **Use here** button, which takes it back (and pauses the other one). This stops two tabs from fighting over the boards.
+
 A serial port (`COMx`) can be used by one program at a time. If a script of yours is using the board, close it first.
 
 ## 2. Pick the data source

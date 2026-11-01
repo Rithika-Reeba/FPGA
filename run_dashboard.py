@@ -6,7 +6,7 @@ the serial ports it holds, and this one becomes the proper instance. Only proces
 project's Streamlit dashboard are ever stopped; anything else that happens to use the port is left
 alone and reported instead.
 
-    venv\\Scripts\\python.exe run_dashboard.py [port]        (default port 8511)
+    venv\\Scripts\\python.exe run_dashboard.py [port] [headless]        (default port 8511)
 """
 
 import json
@@ -18,6 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8511
+HEADLESS = len(sys.argv) > 2 and sys.argv[2].lower() == "headless"      # do not open a browser window by itself
 
 
 def _powershell(script: str) -> str:
@@ -73,4 +74,6 @@ if __name__ == "__main__":
     print("(The first page can take about 20 seconds: it reads the board first.  Ctrl+C stops it.)")
     cmd = [sys.executable, "-m", "streamlit", "run", "dashboard/app.py",
            "--server.port", str(PORT), "--server.address", "localhost"]
+    if HEADLESS:
+        cmd += ["--server.headless", "true"]
     sys.exit(subprocess.call(cmd))
