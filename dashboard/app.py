@@ -189,6 +189,7 @@ def recalibrate_and_reload(port=None, force=True) -> None:
     if port:
         sys._fpga_board_port = port                         # every tab follows this board from now on
         st.session_state["board_port"] = port
+    st.session_state["user_disconnected"] = False           # a board switch reconnects by itself
     st.session_state["_force_recal"] = bool(force)          # the baseline is read once, at the top of the rerun
     st.session_state["_recal_pending"] = True
     auto_baseline.clear()
@@ -239,9 +240,10 @@ if "uart_source" not in st.session_state:
 if st.session_state.data_mode == "Physical UART Stream (Artix-7)":
     if not st.session_state.get("user_disconnected", False):
         if not st.session_state.uart_source.receiver.is_port_open and st.session_state.get("auto_connect", True):
-            target_port = st.session_state.uart_source.receiver.port or detected_fpga_port
+            # always connect to THE active board (the one the baseline belongs to), never to a leftover port
+            target_port = detected_fpga_port or st.session_state.uart_source.receiver.port
             if target_port and target_port not in ("NONE", "No Ports Detected"):
-                st.session_state.uart_source.connect()
+                st.session_state.uart_source.receiver.connect(target_port)
 
 if "estimated_source" not in st.session_state:
     st.session_state.estimated_source = EstimatedDataSource()
