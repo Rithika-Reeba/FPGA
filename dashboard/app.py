@@ -41,18 +41,22 @@ def release_all_serial_ports() -> None:
 
 
 @st.cache_resource(show_spinner=False)
-def auto_baseline(port) -> dict:
+def auto_baseline(port, force=False) -> dict:
     if not port:
         return {"state": "no-board", "port": None, "board_id": None, "build_id": None,
                 "reason": "no Basys 3 detected on USB"}
     release_all_serial_ports()
-    return ensure_calibration(port)
+    return ensure_calibration(port, force=force)
 
 
 # One shared choice of board for the baseline AND the serial receiver (they must never differ):
 # the board picked in the sidebar, else FPGA_PORT, else the first board found.
 BOARD_PORT = st.session_state.get("board_port") or os.environ.get("FPGA_PORT") or detect_board_port()
-BOARD_CAL = auto_baseline(BOARD_PORT)
+# One baseline read per request: recalibrate_and_reload() only sets these flags; the read happens here.
+_force_recal = st.session_state.pop("_force_recal", False)
+BOARD_CAL = auto_baseline(BOARD_PORT, _force_recal)
+if st.session_state.pop("_recal_pending", False):
+    st.session_state["_recal_msg"] = BOARD_CAL
 
 # Modules that read the baseline when they are imported. They (and every data source built from them)
 # must be rebuilt whenever the baseline file changes, e.g. after switching boards, or the mock data
@@ -181,10 +185,8 @@ def recalibrate_and_reload(port=None, force=True) -> None:
     port = port or BOARD_PORT
     if port:
         st.session_state["board_port"] = port
-    st.session_state["_recal_msg"] = (
-        ensure_calibration(port, force=force) if port
-        else {"state": "no-board", "reason": "no Basys 3 detected on USB"}
-    )
+    st.session_state["_force_recal"] = bool(force)          # the baseline is read once, at the top of the rerun
+    st.session_state["_recal_pending"] = True
     auto_baseline.clear()
     get_shared_uart_source.clear()
     for name in _PROJECT_MODULES:

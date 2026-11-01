@@ -122,7 +122,9 @@ def ensure_calibration(port: str, force: bool = False) -> Dict[str, Any]:
     """
     board_id = board_id_for_port(port) or "board"
     try:
-        samples = read_packets(port, rules.AUTOCAL_SAMPLES)
+        # Two packets are enough to learn which build runs and whether the saved baseline matches;
+        # the full 20 (about 10 s) are only read when a new baseline has to be recorded.
+        samples = read_packets(port, 2)
     except Exception as exc:                                   # port busy, unplugged, ...
         return {"state": "error", "port": port, "board_id": board_id, "build_id": None, "reason": f"cannot read {port}: {exc}"}
 
@@ -141,6 +143,12 @@ def ensure_calibration(port: str, force: bool = False) -> Dict[str, Any]:
             return {"state": "ok", "port": port, "board_id": board_id, "build_id": build_id,
                     "reason": "saved baseline matches this board and build"}
 
+    if len(samples) < rules.AUTOCAL_SAMPLES:
+        try:
+            samples = read_packets(port, rules.AUTOCAL_SAMPLES)
+        except Exception as exc:
+            return {"state": "error", "port": port, "board_id": board_id, "build_id": build_id,
+                    "reason": f"cannot read {port}: {exc}"}
     ok, reason = check_idle(samples)
     if not ok:
         if not force:
