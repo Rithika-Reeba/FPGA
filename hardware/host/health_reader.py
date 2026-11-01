@@ -30,7 +30,7 @@ LINE_RE = re.compile(
     r"^R1=(?P<r1>[0-9A-F]{6}),R2=(?P<r2>[0-9A-F]{6}),R3=(?P<r3>[0-9A-F]{6}),"
     r"R4=(?P<r4>[0-9A-F]{6}),T=(?P<t>[0-9A-F]{3}),I=(?P<i>[0-9A-F]{3}),"
     r"A=(?P<a>[0-9A-F]{3}),B=(?P<b>[0-9A-F]{3}),F=(?P<f>[0-9A-F]),"
-    r"S=(?P<s>[0-9A-F]),H=(?P<h>[0-9A-F])(?:,V=(?P<v>[0-9A-F]{4}))?$"
+    r"S=(?P<s>[0-9A-F]),H=(?P<h>[0-9A-F])(?:,V=(?P<v>[0-9A-F]{4}))?(?:,C=(?P<c>[0-9A-F]{2}))?$"
 )
 
 GATE_SECONDS = 0.010            # must match GATE_TICKS / 100 MHz in the RTL
@@ -47,9 +47,17 @@ RANK = {UNCAL: 0, HEALTHY: 1, WARNING: 2, DEGRADED: 3}
 
 def parse_line(line):
     """Return a dict of physical readings, or None if the line is malformed."""
-    m = LINE_RE.match(line.strip())
+    line = line.strip()
+    m = LINE_RE.match(line)
     if not m:
         return None
+    if m.group("c") is not None:                 # newer firmware: C= is the XOR of every byte before ",C="
+        body = line[:line.rindex(",C=")]
+        check = 0
+        for byte in body.encode("ascii"):
+            check ^= byte
+        if check != int(m.group("c"), 16):
+            return None                          # corrupted on the wire: drop it, never show it
     g = {k: int(v, 16) for k, v in m.groupdict().items() if v is not None}
     alive = [bool(g["f"] >> n & 1) for n in range(4)]
     stress = [bool(g["s"] >> n & 1) for n in range(4)]

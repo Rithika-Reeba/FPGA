@@ -130,13 +130,17 @@ module xadc_sensor_reader (
     localparam S_WT_B     = 4'd8;
 
     reg [3:0] state = S_WAIT_EOS;
+    reg [7:0] wait_cnt = 8'd0;      // DRDY watchdog: a read that never answers must not freeze the reader
+    wire      timed_out = (wait_cnt == 8'hFF);
 
     always @(posedge clk) begin
         den     <= 1'b0;
         o_valid <= 1'b0;
+        wait_cnt <= (state != S_WAIT_EOS && !state[0]) ? (wait_cnt == 8'hFF ? wait_cnt : wait_cnt + 8'd1) : 8'd0;   // counts only in the wait-for-DRDY states
 
         if (rst) begin
             state     <= S_WAIT_EOS;
+            wait_cnt  <= 8'd0;
             o_temp    <= 12'd0;
             o_vccint  <= 12'd0;
             o_vccaux  <= 12'd0;
@@ -147,16 +151,16 @@ module xadc_sensor_reader (
                 S_WAIT_EOS: if (eos) state <= S_RD_T;
 
                 S_RD_T: begin daddr <= 7'h00; den <= 1'b1; state <= S_WT_T; end
-                S_WT_T: if (drdy) begin o_temp <= do_out[15:4]; state <= S_RD_I; end
+                S_WT_T: if (timed_out) state <= S_WAIT_EOS; else if (drdy) begin o_temp <= do_out[15:4]; state <= S_RD_I; end
 
                 S_RD_I: begin daddr <= 7'h01; den <= 1'b1; state <= S_WT_I; end
-                S_WT_I: if (drdy) begin o_vccint <= do_out[15:4]; state <= S_RD_A; end
+                S_WT_I: if (timed_out) state <= S_WAIT_EOS; else if (drdy) begin o_vccint <= do_out[15:4]; state <= S_RD_A; end
 
                 S_RD_A: begin daddr <= 7'h02; den <= 1'b1; state <= S_WT_A; end
-                S_WT_A: if (drdy) begin o_vccaux <= do_out[15:4]; state <= S_RD_B; end
+                S_WT_A: if (timed_out) state <= S_WAIT_EOS; else if (drdy) begin o_vccaux <= do_out[15:4]; state <= S_RD_B; end
 
                 S_RD_B: begin daddr <= 7'h06; den <= 1'b1; state <= S_WT_B; end
-                S_WT_B: if (drdy) begin
+                S_WT_B: if (timed_out) state <= S_WAIT_EOS; else if (drdy) begin
                     o_vccbram <= do_out[15:4];
                     o_valid   <= 1'b1;
                     o_ready   <= 1'b1;

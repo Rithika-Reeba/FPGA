@@ -1,4 +1,4 @@
-# Digilent Basys 3 FPGA Health Monitoring Hardware Implementation
+﻿# Digilent Basys 3 FPGA Health Monitoring Hardware Implementation
 
 Complete hardware RTL design, constraints, synthesis, and programming guide for the **AI-Assisted FPGA Health Monitoring System** on the **Digilent Basys 3** (Xilinx Artix-7 `XC7A35T-1CPG236C`).
 
@@ -124,7 +124,7 @@ Overall health follows the dashboard's rule: a region only changes the overall s
 ### Step 1: Verify the serial stream
 Open the board's COM port at **115200 baud, 8N1** (PuTTY, Tera Term, or `python hardware/host/health_reader.py --port COMx`). With `sw[0]` **down** you get two lines per second:
 ```text
-R1=3180E8,R2=3C34B6,R3=436C92,R4=46D74A,T=A07,I=54E,A=99C,B=550,F=F,S=0,H=0,V=896F
+R1=3180E8,R2=3C34B6,R3=436C92,R4=46D74A,T=A07,I=54E,A=99C,B=550,F=F,S=0,H=0,V=896F,C=72
 ```
 | Field | Meaning |
 | :--- | :--- |
@@ -133,6 +133,7 @@ R1=3180E8,R2=3C34B6,R3=436C92,R4=46D74A,T=A07,I=54E,A=99C,B=550,F=F,S=0,H=0,V=89
 | `F` / `S` | Oscillator-alive / stress-active flags, one bit per region (R1 = bit 0) |
 | `H` | On-board verdict: 0 not calibrated, 1 healthy, 2 warning, 3 degraded |
 | `V` | Build ID of this bitstream (baselines are tied to it) |
+| `C` | XOR checksum of every byte before `,C=`. The host drops a line whose checksum does not match (older builds without `C` are still accepted) |
 
 With `sw[0]` up the board sends `HELLO FPGA` instead (link test).
 
@@ -151,5 +152,5 @@ All thresholds are in `health_rules.py`.
    streamlit run dashboard/app.py
    ```
 2. In the sidebar, select **Physical UART Stream (Artix-7)**.
-3. Select your COM port from the dropdown and click **🔌 Connect**.
+3. Select your COM port from the dropdown and click **ðŸ”Œ Connect**.
 4. The dashboard will automatically detect the telemetry stream, validate the physical bounds, compute $\tau = 100/f$, engineer 16 features, evaluate health with Random Forest ML, and run the diagnostic reasoning agent in real time.

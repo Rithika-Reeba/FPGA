@@ -3,12 +3,13 @@
 // Module Name: packet_formatter
 // Description: Serialises raw telemetry as one fixed-length ASCII-hex line:
 //
-//   R1=cccccc,R2=cccccc,R3=cccccc,R4=cccccc,T=ttt,I=iii,A=aaa,B=bbb,F=f,S=s,H=h,V=vvvv\r\n
+//   R1=cccccc,R2=cccccc,R3=cccccc,R4=cccccc,T=ttt,I=iii,A=aaa,B=bbb,F=f,S=s,H=h,V=vvvv,C=cc\r\n
 //
 //   Rn  24-bit RO edge count of region n over one gate window (hex)
 //   T   XADC die temperature code (12-bit)      I/A/B  VCCINT/VCCAUX/VCCBRAM codes
 //   F   oscillator-alive flags {R4,R3,R2,R1}    S  stress-active flags {R4..R1}
 //   H   on-board verdict: 0 = not calibrated, 1 = healthy, 2 = warning, 3 = degraded
+//   C   XOR checksum of every byte before ",C=" (catches a corrupted line; the host drops it)
 //
 // No division / modulo is used; the host converts the codes to physical units.
 // With i_mode_select = 1 a short "HELLO FPGA" line is sent instead (link test).
@@ -40,7 +41,7 @@ module packet_formatter #(
 );
 
     localparam INTERVAL_TICKS = CLK_FREQ_HZ / TRANSMIT_HZ;
-    localparam PKT_BYTES      = 84;
+    localparam PKT_BYTES      = 89;
 
     function [7:0] hx;
         input [3:0] n;
@@ -71,7 +72,7 @@ module packet_formatter #(
         end
     endfunction
 
-    wire [671:0] pkt_live = {
+    wire [655:0] pkt_body = {
         "R1=", hex6(i_cnt1), ",",
         "R2=", hex6(i_cnt2), ",",
         "R3=", hex6(i_cnt3), ",",
@@ -82,13 +83,24 @@ module packet_formatter #(
         "B=",  hex3(i_vccbram), ",",
         "F=",  hx(i_alive),  ",",
         "S=",  hx(i_stress), ",",
-        "H=",  hx({2'b00, i_verdict}), ",V=", hex4(i_build_id),
-        8'h0D, 8'h0A
+        "H=",  hx({2'b00, i_verdict}), ",V=", hex4(i_build_id)
     };
 
-    wire [671:0] pkt_hello = {"HELLO FPGA", 8'h0D, 8'h0A, 576'd0};
+    function [7:0] xor_bytes;
+        input [655:0] v;
+        integer k;
+        begin
+            xor_bytes = 8'h00;
+            for (k = 0; k < 82; k = k + 1) xor_bytes = xor_bytes ^ v[8*k +: 8];
+        end
+    endfunction
 
-    reg [671:0] pkt;
+    wire [7:0] chk = xor_bytes(pkt_body);
+
+    wire [711:0] pkt_live  = {pkt_body, ",C=", hx(chk[7:4]), hx(chk[3:0]), 8'h0D, 8'h0A};
+    wire [711:0] pkt_hello = {"HELLO FPGA", 8'h0D, 8'h0A, 616'd0};
+
+    reg [711:0] pkt;
     reg [6:0]   pkt_len;
     reg [6:0]   idx;
     reg [27:0]  timer;
@@ -101,7 +113,7 @@ module packet_formatter #(
 
     reg [2:0] state;
 
-    wire [6:0] ridx = 7'd83 - idx;           // byte 0 lives in the top bits
+    wire [6:0] ridx = 7'd88 - idx;           // byte 0 lives in the top bits
     wire [9:0] lsb  = {ridx, 3'b000};
 
     always @(posedge clk) begin
@@ -112,7 +124,7 @@ module packet_formatter #(
             state       <= S_IDLE;
             idx         <= 7'd0;
             pkt_len     <= 7'd0;
-            pkt         <= 672'd0;
+            pkt         <= 712'd0;
             o_uart_data <= 8'd0;
             o_tx_active <= 1'b0;
         end else begin
