@@ -29,6 +29,15 @@ import os
 from communication.board_calibration import detect_board_port, ensure_calibration, list_board_ports
 
 
+# One lock for ALL serial access of this server (baseline reads and receiver connects). Several page
+# sessions (browser tabs, a tab that reconnects after a restart) run the script at the same time; without
+# the lock one session read the baseline from a port while another was opening it -> "Access is denied".
+import threading
+if not hasattr(sys, "_fpga_serial_lock"):
+    sys._fpga_serial_lock = threading.RLock()
+SERIAL_LOCK = sys._fpga_serial_lock
+
+
 def release_all_serial_ports() -> None:
     """Close the serial port of EVERY receiver this server ever created. A receiver left open by an
     earlier page load (or before a module reload) would make the baseline reader fail with
@@ -45,8 +54,9 @@ def auto_baseline(port, force=False) -> dict:
     if not port:
         return {"state": "no-board", "port": None, "board_id": None, "build_id": None,
                 "reason": "no Basys 3 detected on USB"}
-    release_all_serial_ports()
-    return ensure_calibration(port, force=force)
+    with SERIAL_LOCK:
+        release_all_serial_ports()
+        return ensure_calibration(port, force=force)
 
 
 # ONE board per server, followed by every browser tab: the baseline file and the serial ports are
@@ -57,7 +67,10 @@ BOARD_PORT = getattr(sys, "_fpga_board_port", None) or os.environ.get("FPGA_PORT
 sys._fpga_board_port = BOARD_PORT
 # One baseline read per request: recalibrate_and_reload() only sets these flags; the read happens here.
 _force_recal = st.session_state.pop("_force_recal", False)
-BOARD_CAL = auto_baseline(BOARD_PORT, _force_recal)
+with st.spinner(f"Connecting to {BOARD_PORT} and recording its baseline (10 to 20 seconds). "
+                "The page below is the previous board until this finishes.", show_time=True) \
+        if BOARD_PORT else st.empty():
+    BOARD_CAL = auto_baseline(BOARD_PORT, _force_recal)
 if st.session_state.pop("_recal_pending", False):
     st.session_state["_recal_msg"] = BOARD_CAL
 
@@ -236,6 +249,17 @@ if "uart_source" not in st.session_state:
     initial_port = detected_fpga_port or "COM10"
     st.session_state.uart_source = get_shared_uart_source(initial_port)
 
+# Close every OTHER receiver this server ever created. An older one (from before a board switch or a
+# reload) can still hold a serial port open while the page points at a new one, and the new one then
+# cannot open that port ("Access is denied") and the page sits on "Port disconnected".
+with SERIAL_LOCK:
+    for _src in list(getattr(sys, "_fpga_receivers", [])):
+        if _src is not st.session_state.uart_source:
+            try:
+                _src.disconnect()
+            except Exception:
+                pass
+
 # If in Physical UART mode and port is closed, attempt auto-connect (unless user explicitly disconnected)
 if st.session_state.data_mode == "Physical UART Stream (Artix-7)":
     if not st.session_state.get("user_disconnected", False):
@@ -243,7 +267,8 @@ if st.session_state.data_mode == "Physical UART Stream (Artix-7)":
             # always connect to THE active board (the one the baseline belongs to), never to a leftover port
             target_port = detected_fpga_port or st.session_state.uart_source.receiver.port
             if target_port and target_port not in ("NONE", "No Ports Detected"):
-                st.session_state.uart_source.receiver.connect(target_port)
+                with SERIAL_LOCK:
+                    st.session_state.uart_source.receiver.connect(target_port)
 
 if "estimated_source" not in st.session_state:
     st.session_state.estimated_source = EstimatedDataSource()
