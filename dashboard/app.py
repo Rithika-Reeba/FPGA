@@ -29,11 +29,23 @@ import os
 from communication.board_calibration import detect_board_port, ensure_calibration, list_board_ports
 
 
+def release_all_serial_ports() -> None:
+    """Close the serial port of EVERY receiver this server ever created. A receiver left open by an
+    earlier page load (or before a module reload) would make the baseline reader fail with
+    "Access is denied". The session's receiver reconnects by itself afterwards."""
+    for _src in list(getattr(sys, "_fpga_receivers", [])):
+        try:
+            _src.disconnect()
+        except Exception:
+            pass
+
+
 @st.cache_resource(show_spinner=False)
 def auto_baseline(port) -> dict:
     if not port:
         return {"state": "no-board", "port": None, "board_id": None, "build_id": None,
                 "reason": "no Basys 3 detected on USB"}
+    release_all_serial_ports()
     return ensure_calibration(port)
 
 
@@ -154,17 +166,18 @@ def load_ml_pipeline():
 @st.cache_resource(show_spinner=False)
 def get_shared_uart_source(port: str) -> LiveUARTDataSource:
     """Provides a singleton LiveUARTDataSource shared across tabs and reruns to prevent COM port lockouts."""
-    return LiveUARTDataSource(port=port)
+    src = LiveUARTDataSource(port=port)
+    if not hasattr(sys, "_fpga_receivers"):
+        sys._fpga_receivers = []
+    sys._fpga_receivers.append(src)
+    return src
 
 
 def recalibrate_and_reload(port=None, force=True) -> None:
     """Record a baseline now (force: a fresh one; the board must be cool and idle), then reload
     every project module so the new numbers take effect everywhere without restarting the
     server. Also used to switch to another board (port given, force off)."""
-    try:
-        st.session_state.uart_source.disconnect()          # free the serial port first
-    except Exception:
-        pass
+    release_all_serial_ports()                             # free every serial port first
     port = port or BOARD_PORT
     if port:
         st.session_state["board_port"] = port
