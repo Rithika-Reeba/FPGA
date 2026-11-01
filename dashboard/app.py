@@ -42,6 +42,29 @@ def auto_baseline(port) -> dict:
 BOARD_PORT = st.session_state.get("board_port") or os.environ.get("FPGA_PORT") or detect_board_port()
 BOARD_CAL = auto_baseline(BOARD_PORT)
 
+# Modules that read the baseline when they are imported. They (and every data source built from them)
+# must be rebuilt whenever the baseline file changes, e.g. after switching boards, or the mock data
+# would be scaled to one baseline while the limits use another.
+_PROJECT_MODULES = (
+    "health_rules", "config", "dashboard.config", "dashboard.charts", "dashboard.components",
+    "dashboard.data_source", "dashboard.health_map", "agent.langgraph_agent",
+    "communication.uart_receiver", "communication.board_calibration", "hardware.host.health_reader",
+)
+_cal_file = PROJECT_ROOT / "hardware" / "host" / "calibration.json"
+try:
+    _cal_stat = _cal_file.stat()
+    _cal_key = (_cal_stat.st_mtime_ns, _cal_stat.st_size)
+except OSError:
+    _cal_key = None
+if getattr(sys, "_fpga_loaded_cal", "unset") != _cal_key:      # modules were imported with another baseline
+    for _name in _PROJECT_MODULES:
+        sys.modules.pop(_name, None)
+    sys._fpga_loaded_cal = _cal_key
+if st.session_state.get("_session_cal") != _cal_key:            # this session's data sources are stale too
+    for _key in ("sim_source", "mock_source", "estimated_source"):
+        st.session_state.pop(_key, None)
+    st.session_state["_session_cal"] = _cal_key
+
 from config import RO_STAGES, RO_FREQ_NOMINAL_MHZ
 import health_rules
 from dashboard.config import (
@@ -134,13 +157,6 @@ def get_shared_uart_source(port: str) -> LiveUARTDataSource:
     return LiveUARTDataSource(port=port)
 
 
-_PROJECT_MODULES = (
-    "health_rules", "config", "dashboard.config", "dashboard.charts", "dashboard.components",
-    "dashboard.data_source", "dashboard.health_map", "agent.langgraph_agent",
-    "communication.uart_receiver", "communication.board_calibration", "hardware.host.health_reader",
-)
-
-
 def recalibrate_and_reload(port=None, force=True) -> None:
     """Record a baseline now (force: a fresh one; the board must be cool and idle), then reload
     every project module so the new numbers take effect everywhere without restarting the
@@ -184,6 +200,8 @@ if "refresh_rate" not in st.session_state:
     st.session_state.refresh_rate = 1 if detected_fpga_port else 2
 if "auto_connect" not in st.session_state:
     st.session_state.auto_connect = True
+if "sim_deg" not in st.session_state:
+    st.session_state["sim_deg"] = 0.0          # a new simulation starts Healthy
 if "sim_source" not in st.session_state:
     st.session_state.sim_source = LiveSimulationDataSource()
 if "mock_source" not in st.session_state:
@@ -271,12 +289,15 @@ with st.sidebar:
                     st.rerun()
 
     elif "Simulation" in data_mode:
-        sim_deg = st.slider("Simulated Aging Degradation Factor", 0.0, 1.0, 0.45, 0.05)
+        # The simulation starts Healthy (level 0). Raising the slider injects ageing: both the running
+        # stream and "Inject Step Measurement" use the slider's level.
+        sim_deg = st.slider("Simulated Aging Degradation Factor", 0.0, 1.0, step=0.05, key="sim_deg")
         if st.button("⚡ Inject Step Measurement", width="stretch"):
             st.session_state.sim_source.step(degradation=sim_deg)
             st.rerun()
         if st.button("🔄 Reset Simulation Buffer", width="stretch"):
             st.session_state.sim_source.reset()
+            st.session_state["sim_deg"] = 0.0
             st.rerun()
 
     elif "Physical UART" in data_mode:
@@ -589,7 +610,7 @@ try:
 
     elif "Simulation" in data_mode:
         if st.session_state.auto_refresh:
-            st.session_state.sim_source.step(degradation=0.55)
+            st.session_state.sim_source.step(degradation=st.session_state.get("sim_deg", 0.0))
         history_df, latest, meta = st.session_state.sim_source.get_data(window_size=150)
         source_badge = "LIVE SIMULATION"
 
@@ -612,9 +633,7 @@ try:
 
         # SW15 on the board injects a fault into R2's reading. Say so clearly: it is a demo, not wear.
         if meta.get("test_fault") and meta.get("has_real_data") and not meta.get("is_stale"):
-            st.warning(f"**TEST FAULT INJECTED on {meta['test_fault']} (by the board: switch SW15 or the demo build).** "
-                       f"{meta['test_fault']}'s frequency is reduced by the board on purpose to demonstrate a single-region "
-                       "warning; it is NOT a measured degradation. The other regions show real readings.")
+            st.caption(f"Demo: injected test fault on {meta['test_fault']} (not a measured degradation).")
 
         # Show health only while telemetry is really arriving: no packets yet, a HELLO link test,
         # or telemetry that went quiet must never leave the last reading on screen as "live".
