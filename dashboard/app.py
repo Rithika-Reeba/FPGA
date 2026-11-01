@@ -22,6 +22,17 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 # -----------------------------------------------------------------------------
+# Skeleton loading screen: shown at once on the first load and during a board switch, removed as soon as
+# the real page (or an error screen) takes over, so the wait never looks like an empty or frozen page.
+# -----------------------------------------------------------------------------
+from dashboard.skeleton import skeleton_html
+
+_skeleton = st.empty()
+if not st.session_state.get("_ui_loaded") or st.session_state.get("_recal_pending"):
+    _skeleton.html(skeleton_html("Loading the dashboard: connecting to the board and recording its baseline "
+                                 "(10 to 20 seconds the first time or after switching boards)"))
+
+# -----------------------------------------------------------------------------
 # Automatic board baseline. Must run BEFORE the config modules are imported (they read the
 # calibration once, at import). The result is cached for the life of the server.
 # -----------------------------------------------------------------------------
@@ -67,10 +78,7 @@ BOARD_PORT = getattr(sys, "_fpga_board_port", None) or os.environ.get("FPGA_PORT
 sys._fpga_board_port = BOARD_PORT
 # One baseline read per request: recalibrate_and_reload() only sets these flags; the read happens here.
 _force_recal = st.session_state.pop("_force_recal", False)
-with st.spinner(f"Connecting to {BOARD_PORT} and recording its baseline (10 to 20 seconds). "
-                "The page below is the previous board until this finishes.", show_time=True) \
-        if BOARD_PORT else st.empty():
-    BOARD_CAL = auto_baseline(BOARD_PORT, _force_recal)
+BOARD_CAL = auto_baseline(BOARD_PORT, _force_recal)
 if st.session_state.pop("_recal_pending", False):
     st.session_state["_recal_msg"] = BOARD_CAL
 
@@ -620,6 +628,7 @@ with st.sidebar:
         if not est_valid:
             for err in est_errors:
                 st.error(f"❌ {err}")
+            _skeleton.empty()
             st.stop()
         elif est_warnings:
             for warn in est_warnings:
@@ -648,6 +657,7 @@ model, model_features, model_error = load_ml_pipeline()
 
 if model_error:
     st.error(f"⚠️ {model_error}")
+    _skeleton.empty()
     st.stop()
 
 # Select appropriate data source
@@ -752,11 +762,13 @@ try:
             if rcv.is_port_open and st.session_state.get("auto_refresh", True):
                 time.sleep(1)
                 st.rerun()
+            _skeleton.empty()
             st.stop()
 
 except Exception as e:
     st.error(f"Sensor data stream unavailable: {str(e)}")
     st.info("Waiting for valid FPGA telemetry stream...")
+    _skeleton.empty()
     st.stop()
 
 
@@ -784,6 +796,7 @@ try:
     missing_feats = [f for f in model_features if f not in history_df.columns]
     if missing_feats:
         st.error(f"Missing required engineered features: {missing_feats}")
+        _skeleton.empty()
         st.stop()
 
     # The model was trained on data whose healthy RO frequency is the placeholder nominal. Express
@@ -816,6 +829,7 @@ try:
 
 except Exception as e:
     st.error(f"ML Model inference error: {str(e)}")
+    _skeleton.empty()
     st.stop()
 
 
@@ -905,6 +919,8 @@ if "UART" in st.session_state.data_mode and BOARD_CAL["state"] in ("waiting", "e
     )
 
 # 1. Header, FPGA Chip Logo, Monitoring Status
+_skeleton.empty()
+st.session_state["_ui_loaded"] = True
 render_header(
     status_label="ESTIMATED MODE" if "Estimated" in data_mode else "ACTIVE",
     source_label=source_badge,
