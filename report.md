@@ -88,7 +88,11 @@ wire [15:0] ro_freq_mhz_x10 = ro_sum[17:2]; // Average (sum / 4)
 | **`VCCBRAM`** | Block RAM Rail (1.0V) | **`MEASURED`** | Sampled via on-chip XADC internal channel 6 (DRP 0x06). |
 | **`RO_Delay_ns`** | Regional Inverter Stage Delay | **`DERIVED`** | Deterministically derived: $\tau = 1000 / (2 \times 5 \times f_{\text{MHz}}) = 100 / f_{\text{MHz}}$. |
 
-### Raw Received Telemetry Sample (Live COM10 Stream)
+### Raw Received Telemetry Sample (older JSON firmware format)
+The current board design sends one ASCII-hex line per reading instead, for example
+`R1=4B6AFA,R2=439EC1,R3=45E072,R4=490162,T=A01,I=556,A=998,B=556,F=F,S=8,H=0,V=6060`
+(region counts, XADC codes, alive flags, stress/fault flags, the board's own verdict and the build ID). The dashboard decodes it into the same fields as below.
+
 ```json
 {
   "Temperature": 37.3,

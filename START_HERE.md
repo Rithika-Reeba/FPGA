@@ -58,6 +58,14 @@ vivado -mode batch -source hardware/vivado/program_fpga.tcl -tclargs 210183B3150
 Programming is volatile and reversible: it only lasts until the board loses power.
 With two boards connected always give the board id, so the wrong one is never programmed.
 
+The dashboard **never writes to a board's flash**. The program stored on each board stays as it is, and a power-off or
+the PROG button brings that stored program back.
+
+**Choosing which design is loaded:** a tiny, faint switch at the very bottom-left corner of the sidebar picks the design.
+Flipping it loads the matching design into the monitored board (about 30 seconds; the skeleton screen shows): **on** =
+the R2 demo-fault design, **off** = the normal design. The Burn button loads the design for the current switch position.
+Both are temporary. The switch acts on the board currently shown in "Board to monitor".
+
 ### 3.2 The baseline (automatic)
 
 Healthy is judged against the board's own frequencies. The dashboard records them by itself:
@@ -122,6 +130,8 @@ if it moves.
 - **Without a window:** `vivado -mode batch -source hardware/vivado/show_floorplan.tcl` prints each Pblock's area.
 
 ## 4c. The "fault board" demo build
+
+(The dashboard's faint switch loads this design for you, temporarily; the commands here are the manual way.)
 
 A bitstream with the R2 test fault permanently on is built with `set FPGA_FAULT_ALWAYS=1` before the build command in
 section 4 (output goes to `C:\vivado_build\build_fault`, the normal `.bit` is untouched). Program it only into the board that

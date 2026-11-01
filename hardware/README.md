@@ -152,4 +152,4 @@ All thresholds are in `health_rules.py`.
    ```
 2. In the sidebar, select **Physical UART Stream (Artix-7)**.
 3. Select your COM port from the dropdown and click **🔌 Connect**.
-4. The dashboard will automatically detect the telemetry stream, validate the physical bounds, compute $\tau = 100/f$, engineer 16 features, evaluate health with Random Forest ML, and run the LangGraph diagnostic reasoning agent in real time.
+4. The dashboard will automatically detect the telemetry stream, validate the physical bounds, compute $\tau = 100/f$, engineer 16 features, evaluate health with Random Forest ML, and run the diagnostic reasoning agent in real time.

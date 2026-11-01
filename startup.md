@@ -1,9 +1,10 @@
+> **On this laptop use `START_HERE.md`.** It has the current start-up steps: start the dashboard with `venv\Scripts\python.exe run_dashboard.py` (only one dashboard runs at a time), board handling, Vivado and troubleshooting. The guide below is the generic cross-platform one.
+
 # AI-Assisted FPGA Health Monitoring & Predictive Health Management (PHM)
 ## Complete Cross-Platform Startup Guide (macOS & Windows)
 
 [![Streamlit Dashboard](https://img.shields.io/badge/Dashboard-Streamlit-FF4B4B.svg)](https://streamlit.io/)
 [![Machine Learning](https://img.shields.io/badge/ML-Scikit--Learn-F7931E.svg)](https://scikit-learn.org/)
-[![AI Agent](https://img.shields.io/badge/Agent-LangGraph-0052FF.svg)](https://langchain-ai.github.io/langgraph/)
 [![Target Hardware](https://img.shields.io/badge/Hardware-Xilinx%20Artix--7-blue.svg)](https://digilent.com/reference/programmable-logic/basys-3/start)
 
 A research-grade health monitoring and predictive maintenance system for FPGAs (specifically modeled for Xilinx Artix-7 on Digilent Basys 3). The system tracks on-chip physical degradation mechanisms (Bias Temperature Instability, Hot Carrier Injection, thermal wear-out, and supply voltage droop) by monitoring Ring Oscillator (RO) timing drift across four physically constrained silicon quadrants, die temperature, multi-rail voltages, and functional error rates.

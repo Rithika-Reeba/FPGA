@@ -27,7 +27,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import health_rules as rules
-from hardware.host.health_reader import REGIONS, build_calibration, parse_line
+from hardware.host.health_reader import REGIONS, build_calibration, check_idle, parse_line
 
 HOST_DIR = PROJECT_ROOT / "hardware" / "host"
 CAL_FILE = rules.calibration_path()
@@ -90,28 +90,6 @@ def read_packets(port: str, count: int, timeout_s: float = 20.0) -> List[Dict[st
             if parsed:
                 out.append(parsed)
     return out
-
-
-def check_idle(samples: List[Dict[str, Any]]) -> Tuple[bool, str]:
-    """Is this stretch of telemetry a trustworthy healthy reference?"""
-    if len(samples) < rules.AUTOCAL_SAMPLES:
-        return False, f"only {len(samples)} of {rules.AUTOCAL_SAMPLES} packets received"
-    if len({s.get("test_fault") for s in samples}) > 1:
-        return False, "the test fault was switched on or off while recording; keep it steady"
-    if any(any(s["stress"].values()) for s in samples):
-        return False, "a stress switch (sw12..sw14) is on; switch it off and let the chip cool"
-    if any(not all(s["alive"].values()) for s in samples):
-        return False, "a ring oscillator is not running (is sw1 up?)"
-    hottest = max(s["temp_c"] for s in samples)
-    if hottest > rules.TEMP_AUTOCAL_MAX_C:
-        return False, f"board is warm ({hottest:.1f} C, limit {rules.TEMP_AUTOCAL_MAX_C:.0f} C); wait for it to cool"
-    for r in REGIONS:
-        vals = [s["freq_mhz"][r] for s in samples]
-        mean = sum(vals) / len(vals)
-        std = (sum((v - mean) ** 2 for v in vals) / len(vals)) ** 0.5
-        if mean <= 0 or std / mean > rules.AUTOCAL_MAX_REL_STD:
-            return False, f"{r} is not steady yet (variation {std / max(mean, 1e-9) * 100:.3f} %)"
-    return True, "cool, idle and steady"
 
 
 def ensure_calibration(port: str, force: bool = False) -> Dict[str, Any]:

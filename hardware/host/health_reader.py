@@ -102,6 +102,28 @@ def build_calibration(samples):
     return cal
 
 
+def check_idle(samples: list) -> tuple:
+    """Is this stretch of telemetry a trustworthy healthy reference?"""
+    if len(samples) < rules.AUTOCAL_SAMPLES:
+        return False, f"only {len(samples)} of {rules.AUTOCAL_SAMPLES} packets received"
+    if len({s.get("test_fault") for s in samples}) > 1:
+        return False, "the test fault was switched on or off while recording; keep it steady"
+    if any(any(s["stress"].values()) for s in samples):
+        return False, "a stress switch (sw12..sw14) is on; switch it off and let the chip cool"
+    if any(not all(s["alive"].values()) for s in samples):
+        return False, "a ring oscillator is not running (is sw1 up?)"
+    hottest = max(s["temp_c"] for s in samples)
+    if hottest > rules.TEMP_AUTOCAL_MAX_C:
+        return False, f"board is warm ({hottest:.1f} C, limit {rules.TEMP_AUTOCAL_MAX_C:.0f} C); wait for it to cool"
+    for r in REGIONS:
+        vals = [s["freq_mhz"][r] for s in samples]
+        mean = sum(vals) / len(vals)
+        std = (sum((v - mean) ** 2 for v in vals) / len(vals)) ** 0.5
+        if mean <= 0 or std / mean > rules.AUTOCAL_MAX_REL_STD:
+            return False, f"{r} is not steady yet (variation {std / max(mean, 1e-9) * 100:.3f} %)"
+    return True, "cool, idle and steady"
+
+
 def classify(reading, cal):
     """Return (overall_state, {region: state}, [reasons])."""
     reasons, regions = [], {}
@@ -206,8 +228,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", help="serial port, e.g. COM3")
     ap.add_argument("--replay", help="read lines from a log file instead of a serial port")
-    ap.add_argument("--calibrate", type=int, metavar="SECONDS",
-                    help="record a baseline for SECONDS while the board is known healthy")
+    ap.add_argument("--calibrate", type=int, metavar="SECONDS", nargs="?", const=1,
+                    help="record a baseline (the number is ignored: the dashboard's safe procedure is used, "
+                         "which needs the board cool, idle and steady)")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
 
@@ -220,20 +243,24 @@ def main():
     source = lines_from_serial(args.port) if args.port else lines_from_file(args.replay)
 
     if args.calibrate:
-        print(f"Calibrating for {args.calibrate} s - keep every stress switch OFF...")
-        end, samples = time.time() + args.calibrate, []
-        for line in source:
-            reading = parse_line(line)
-            if reading:
-                samples.append(reading)
-                print(f"  {len(samples)} samples", end="\r")
-            if time.time() >= end:
-                break
+        if args.port:
+            # live board: the same safe procedure as the dashboard (cool, idle, steady, all oscillators alive;
+            # fault-injection corrected; the board is recorded in the file)
+            from communication.board_calibration import ensure_calibration
+            print("Recording the baseline: every stress switch and SW15 must be down and the board cool...")
+            res = ensure_calibration(args.port, force=True)
+            print(res["reason"])
+            sys.exit(0 if res["state"] in ("ok", "created") else 1)
+        samples = [s for s in (parse_line(line) for line in source) if s]       # replay file
+        ok, why = check_idle(samples)
+        if not ok:
+            print(f"Not recorded: {why}")
+            sys.exit(1)
         cal = build_calibration(samples)
-        cal.update({"build_id": samples[-1].get("build_id"), "mode": "manual",
+        cal.update({"build_id": samples[-1].get("build_id"), "mode": "replay",
                     "recorded": time.strftime("%Y-%m-%d %H:%M:%S")})
         _calib_path().write_text(json.dumps(cal, indent=2))
-        print(f"\nSaved {_calib_path().name}")
+        print(f"Saved {_calib_path().name} from {len(samples)} samples")
         for r in REGIONS:
             c = cal["regions"][r]
             print(f"  {r}: {c['mean_mhz']:.3f} MHz  (std {c['std_mhz']:.4f})")
