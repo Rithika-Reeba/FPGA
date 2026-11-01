@@ -53,6 +53,8 @@ def parse_line(line):
     g = {k: int(v, 16) for k, v in m.groupdict().items() if v is not None}
     alive = [bool(g["f"] >> n & 1) for n in range(4)]
     stress = [bool(g["s"] >> n & 1) for n in range(4)]
+    test_fault = stress[3]          # sw15 is the injected R2 fault, not a heater
+    stress[3] = False
     freq = {}
     for n, name in enumerate(REGIONS):
         count = g[name.lower()]
@@ -61,6 +63,7 @@ def parse_line(line):
         "freq_mhz": freq,
         "alive": dict(zip(REGIONS, alive)),
         "stress": dict(zip(REGIONS, stress)),
+        "test_fault": "R2" if test_fault else None,   # injected by the board; NOT a measurement
         "temp_c": g["t"] * 503.975 / 4096 - 273.15,
         "VCCINT": g["i"] * 3.0 / 4096,
         "VCCAUX": g["a"] * 3.0 / 4096,
@@ -72,6 +75,19 @@ def parse_line(line):
 
 def _calib_path():
     return Path(__file__).with_name("calibration.json")
+
+
+def board_id_for_port(port):
+    """USB serial number of the board on `port` (without the channel letter), or None."""
+    try:
+        import serial.tools.list_ports as lp
+        for p in lp.comports():
+            if p.device == port and p.serial_number:
+                sn = re.sub(r"[^A-Za-z0-9]", "", p.serial_number)
+                return sn[:-1] if sn[-1:] in ("A", "B") else sn
+    except ImportError:
+        pass
+    return None
 
 
 def build_calibration(samples):
@@ -228,6 +244,12 @@ def main():
         cal = json.loads(_calib_path().read_text())
     else:
         print(f"No calibration - run with --calibrate first. Showing raw values.")
+    # A baseline belongs to ONE board: judging another board against it would call a healthy board
+    # Degraded (or a bad one Healthy). Refuse it instead.
+    if cal and args.port and cal.get("board_id") and board_id_for_port(args.port) not in (None, cal["board_id"]):
+        print(f"The saved baseline is for board {cal['board_id']}, but {args.port} is board "
+              f"{board_id_for_port(args.port)}. Not using it; run --calibrate for this board. Showing raw values.")
+        cal = None
     try:
         for line in source:
             reading = parse_line(line)

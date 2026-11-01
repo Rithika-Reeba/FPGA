@@ -72,6 +72,7 @@ class FPGAUARTReceiver:
         self.handshake_message: str = ""
         self.connection_start_time: float = 0.0
         self.last_build_id: Optional[str] = None      # V= field of the newest telemetry packet
+        self.last_test_fault: Optional[str] = None    # region the board's sw15 test fault is injected into
 
         # Rolling packet rate estimation
         self._recent_timestamps: List[float] = []
@@ -665,6 +666,7 @@ class FPGAUARTReceiver:
         if p is None:
             return None
         self.last_build_id = p.get("build_id")
+        self.last_test_fault = p.get("test_fault")
 
         regions = ("R1", "R2", "R3", "R4")
         freqs = {r: (p["freq_mhz"][r] if p["alive"][r] else 0.0) for r in regions}

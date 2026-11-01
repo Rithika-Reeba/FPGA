@@ -63,6 +63,12 @@ def _open_target(board_id: Optional[str]) -> str:
     return _OPEN_TARGET_TCL.replace("__WANT__", want)
 
 
+def _error_lines(output: str):
+    """Real Vivado errors only. Vivado also echoes the script's own source lines (starting with '#'),
+    and those contain the text "ERROR:" inside puts commands; they must not count as errors."""
+    return [l.strip() for l in output.splitlines() if l.lstrip().startswith("ERROR:")]
+
+
 def run_vivado_tcl(tcl_commands: str, timeout_sec: int = 120) -> Tuple[bool, str]:
     """Run Vivado in batch mode on a temporary Tcl script. Success = exit code 0 and no ERROR line."""
     if not Path(VIVADO_BAT).exists():
@@ -75,7 +81,7 @@ def run_vivado_tcl(tcl_commands: str, timeout_sec: int = 120) -> Tuple[bool, str
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec, cwd=str(PROJECT_ROOT))
         output = proc.stdout + "\n" + proc.stderr
-        return (proc.returncode == 0 and "ERROR:" not in output), output
+        return (proc.returncode == 0 and not _error_lines(output)), output
     except subprocess.TimeoutExpired:
         return False, f"Vivado operation timed out after {timeout_sec} seconds."
     except Exception as exc:
@@ -112,9 +118,9 @@ close_hw_manager
 puts "SUCCESS: Basys 3 successfully programmed."
 """
     ok, out = run_vivado_tcl(tcl, timeout_sec=120)
-    if ok and "SUCCESS: Basys 3 successfully programmed." in out:
+    if ok and any(l.strip() == "SUCCESS: Basys 3 successfully programmed." for l in out.splitlines()):
         return True, f"Board {board_id or '(only board)'} programmed with {bit_path.name} (build in the V= field). Telemetry is on UART 115200 8N1."
-    detail = [line for line in out.splitlines() if "ERROR" in line][:4]
+    detail = _error_lines(out)[:4]
     return False, "Programming failed:\n" + ("\n".join(detail) or out[-600:])
 
 

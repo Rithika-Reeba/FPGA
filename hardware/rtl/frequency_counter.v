@@ -80,14 +80,19 @@ module frequency_counter #(
     reg [23:0] latched = 24'd0;
     reg        done_tog = 1'b0;
 
-    // "start" is registered: it clears 24 counter flops, and decoding the FSM state straight
-    // into that fan-out was the slowest path in the oscillator domain. The one-cycle delay
-    // shifts every measurement by 2 RO edges (one prescaled edge, counts are doubled): about 0.00005 %, negligible.
+    // "start" and "stop" are registered: start clears 24 counter flops and stop resets the flush
+    // counter, and decoding the FSM state straight into that fan-out was the slowest path in the
+    // oscillator domain. Both are delayed by the same one cycle, so the counted window keeps its
+    // length (the edge of jitter this adds is about 0.00005 %, negligible).
     wire start_pre = (st == ST_IDLE) && g2 && !g3;
+    wire stop_pre  = (st == ST_COUNT) && !g2 && g3;
     reg  start = 1'b0;
-    wire stop  = (st == ST_COUNT) && !g2 && g3;
+    reg  stop  = 1'b0;
 
-    always @(posedge ro_div) start <= start_pre;
+    always @(posedge ro_div) begin
+        start <= start_pre;
+        stop  <= stop_pre;
+    end
 
     always @(posedge ro_div) begin
         g1 <= gate_ref;

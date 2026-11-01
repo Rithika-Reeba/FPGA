@@ -292,7 +292,7 @@ with st.sidebar:
             if _new_port != BOARD_PORT:
                 recalibrate_and_reload(port=_new_port, force=False)
         _icon = {"ok": "🟢", "created": "🟢", "waiting": "🟡", "error": "🔴"}.get(BOARD_CAL["state"], "⚪")
-        st.caption(f"{_icon} **Baseline**: {BOARD_CAL['reason']}  \nRecorded automatically from the connected board. Build `{BOARD_CAL['build_id']}` · build `{BOARD_CAL['build_id']}`")
+        st.caption(f"{_icon} **Baseline**: {BOARD_CAL['reason']}  \nRecorded automatically from the connected board. Build `{BOARD_CAL['build_id']}`")
         _recal = st.session_state.pop("_recal_msg", None)
         if _recal:
             (st.success if _recal["state"] in ("created", "ok") else st.warning)(f"Recalibration: {_recal['reason']}")
@@ -609,6 +609,12 @@ try:
                 and st.session_state.get("_rebaselined_for") != _build:
             st.session_state["_rebaselined_for"] = _build
             recalibrate_and_reload(port=BOARD_PORT, force=False)
+
+        # SW15 on the board injects a fault into R2's reading. Say so clearly: it is a demo, not wear.
+        if meta.get("test_fault") and meta.get("has_real_data") and not meta.get("is_stale"):
+            st.warning(f"**TEST FAULT INJECTED on {meta['test_fault']} (by the board: switch SW15 or the demo build).** "
+                       f"{meta['test_fault']}'s frequency is reduced by the board on purpose to demonstrate a single-region "
+                       "warning; it is NOT a measured degradation. The other regions show real readings.")
 
         # Show health only while telemetry is really arriving: no packets yet, a HELLO link test,
         # or telemetry that went quiet must never leave the last reading on screen as "live".

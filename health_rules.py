@@ -53,6 +53,10 @@ TEMP_AUTOCAL_MAX_C = 46.0     # idle die temperature on the Basys 3 is about 42-
 AUTOCAL_SAMPLES = 20          # about 10 s of telemetry (2 packets per second)
 AUTOCAL_MAX_REL_STD = 0.0005  # per-region frequency std/mean must stay below 0.05 %
 
+# The board's sw15 / demo-build test fault lowers R2's count by 1/2**TEST_FAULT_SHIFT (RTL: FAULT_SHIFT).
+# A baseline recorded while the fault is on is corrected by the same factor, so it is R2's TRUE baseline.
+TEST_FAULT_SHIFT = 7
+
 # Functional error rate (fraction of bad bits). Not produced by the current board
 # firmware; kept for the simulated sources and for a future hardware canary path.
 ERROR_RATE_WARN = 0.0005

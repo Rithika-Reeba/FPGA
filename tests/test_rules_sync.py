@@ -59,6 +59,9 @@ class TestRtlMatchesRules(unittest.TestCase):
         self.assertAlmostEqual(100.0 / 2 ** _rtl_value("WARN_SHIFT"), rules.RO_WARN_DROP_PCT, places=6)
         self.assertAlmostEqual(100.0 / 2 ** _rtl_value("DEG_SHIFT"), rules.RO_CRIT_DROP_PCT, places=6)
 
+    def test_test_fault_shift(self):
+        self.assertEqual(_rtl_value("FAULT_SHIFT"), rules.TEST_FAULT_SHIFT)
+
     def test_region_quorum(self):
         self.assertEqual(_rtl_value("REGION_QUORUM"), rules.REGION_QUORUM)
 

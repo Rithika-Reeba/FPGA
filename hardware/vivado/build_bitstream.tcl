@@ -7,7 +7,10 @@ set script_dir [file dirname [file normalize [info script]]]
 set proj_root  [file normalize "$script_dir/.."]
 # Switch working directory and build output to local non-OneDrive disk
 set local_work "C:/vivado_build"
-set output_dir "$local_work/build"
+# Demo variant: FPGA_FAULT_ALWAYS=1 builds a bitstream whose R2 test fault is always on. It goes to its
+# own folder so the normal bitstream is never overwritten.
+set fault_always [expr {[info exists ::env(FPGA_FAULT_ALWAYS)] && $::env(FPGA_FAULT_ALWAYS) eq "1"}]
+set output_dir "$local_work/build[expr {$fault_always ? "_fault" : ""}]"
 file mkdir $local_work
 file mkdir $output_dir
 cd $local_work
@@ -28,7 +31,7 @@ read_xdc $proj_root/constraints/basys3.xdc
 puts "--> Running Synthesis (preserving module hierarchy for Pblock assignment)..."
 set build_id [expr {([clock seconds] % 65534) + 1}]
 puts "--> Build ID: [format %04X $build_id] (sent in every telemetry packet as V=; baselines are tied to it)"
-synth_design -top fpga_health_top -part xc7a35tcpg236-1 -flatten_hierarchy rebuilt -generic BUILD_ID=$build_id
+synth_design -top fpga_health_top -part xc7a35tcpg236-1 -flatten_hierarchy rebuilt -generic BUILD_ID=$build_id -generic FAULT_ALWAYS=$fault_always
 
 source $proj_root/vivado/ro_constraints.tcl
 
@@ -52,6 +55,9 @@ foreach pb $required_pbs {
     }
     puts "    $pb: Verified [llength $assigned_cells] assigned cells."
 }
+
+# A bitstream left over from an earlier run must never be mistaken for this build's result.
+file delete -force $output_dir/fpga_health_top.bit
 
 # 5. Logic Optimization
 puts "--> Running Logic Optimization (opt_design)..."
@@ -93,6 +99,13 @@ foreach pb [get_pblocks] {
 }
 report_drc -file $output_dir/drc.rpt
 
+# Timing gate: a design that misses timing (setup or hold) is not written out. The oscillator
+# counters run at hundreds of MHz, so a miss there can give wrong readings.
+set wns [get_property SLACK [get_timing_paths -max_paths 1 -setup]]
+set whs [get_property SLACK [get_timing_paths -max_paths 1 -hold]]
+puts "--> Timing after route: WNS=$wns ns, WHS=$whs ns"
+if {$wns < 0 || $whs < 0} { error "BUILD FAILED: timing not met (WNS=$wns ns, WHS=$whs ns); no bitstream written" }
+
 # 9. Write Bitstream
 catch { set_property SEVERITY {Warning} [get_drc_checks LUTLP-1] }
 set bitstream_path "$output_dir/fpga_health_top.bit"
@@ -101,8 +114,10 @@ write_bitstream -force $bitstream_path
 
 # Copy fresh bitstream to project hardware root
 set local_bit "$proj_root/fpga_health_top.bit"
-file copy -force $bitstream_path $local_bit
-puts "--> Copied fresh bitstream to: $local_bit"
+if {!$fault_always} {   ;# the demo fault build must never replace the normal bitstream
+    file copy -force $bitstream_path $local_bit
+    puts "--> Copied fresh bitstream to: $local_bit"
+}
 
 puts "======================================================================"
 puts " SUCCESS: Four-Region Bitstream successfully generated at:"

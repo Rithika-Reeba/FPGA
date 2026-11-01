@@ -96,8 +96,10 @@ def check_idle(samples: List[Dict[str, Any]]) -> Tuple[bool, str]:
     """Is this stretch of telemetry a trustworthy healthy reference?"""
     if len(samples) < rules.AUTOCAL_SAMPLES:
         return False, f"only {len(samples)} of {rules.AUTOCAL_SAMPLES} packets received"
+    if len({s.get("test_fault") for s in samples}) > 1:
+        return False, "the test fault was switched on or off while recording; keep it steady"
     if any(any(s["stress"].values()) for s in samples):
-        return False, "a stress switch (sw12..sw15) is on; switch it off and let the chip cool"
+        return False, "a stress switch (sw12..sw14) is on; switch it off and let the chip cool"
     if any(not all(s["alive"].values()) for s in samples):
         return False, "a ring oscillator is not running (is sw1 up?)"
     hottest = max(s["temp_c"] for s in samples)
@@ -147,6 +149,12 @@ def ensure_calibration(port: str, force: bool = False) -> Dict[str, Any]:
         return {"state": "waiting", "port": port, "board_id": board_id, "build_id": build_id, "reason": reason}
 
     cal = build_calibration(samples)
+    fault = samples[-1].get("test_fault")
+    if fault:       # baseline taken with the injected fault on: undo it, so the baseline is the TRUE one
+        k = 1.0 - 2.0 ** -rules.TEST_FAULT_SHIFT
+        cal["regions"][fault]["mean_mhz"] /= k
+        cal["regions"][fault]["std_mhz"] /= k
+        cal["test_fault_compensated"] = fault
     cal.update({"board_id": board_id, "build_id": build_id,
                 "recorded": time.strftime("%Y-%m-%d %H:%M:%S"), "mode": "automatic"})
     CAL_FILE.write_text(json.dumps(cal, indent=2))

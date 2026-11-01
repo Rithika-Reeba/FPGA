@@ -231,6 +231,19 @@ module tb_fpga_health_top;
         wait_lines(3);
         check(f_h(0) == 24'h1,               "btnU calibrates once the switch is down");
 
+        $display("== Phase 9: sw15 test fault shows R2 as warning only ==");
+        sw[15] = 1'b1;
+        wait_lines(4);
+        show_line;
+        check(f_s(0)  == 24'h8,              "packet flags the test fault (S bit 3), no heater runs");
+        check(dut.rv2 == 2'd2,               "R2 reads warning");
+        check(dut.rv1 == 2'd1 && dut.rv3 == 2'd1 && dut.rv4 == 2'd1, "R1, R3, R4 stay healthy");
+        check(f_h(0)  == 24'h1,              "overall stays healthy (quorum of 2 not met)");
+        check(led[15] == 1'b1,               "led15 solid while the fault is injected");
+        sw[15] = 1'b0;
+        wait_lines(4);
+        check(dut.rv2 == 2'd1,               "R2 healthy again with the switch down");
+
         $display("");
         if (errors == 0) $display("ALL TESTS PASSED");
         else             $display("TESTS FAILED: %0d error(s)", errors);

@@ -489,6 +489,7 @@ class LiveUARTDataSource:
             "is_stale": self.receiver.is_stale,
             "data_age_s": self.receiver.data_age_s,
             "build_id": self.receiver.last_build_id,
+            "test_fault": self.receiver.last_test_fault,
             "is_streaming": self.receiver.is_streaming,
             "is_port_open": self.receiver.is_port_open,
             "is_connected": self.receiver.is_connected,

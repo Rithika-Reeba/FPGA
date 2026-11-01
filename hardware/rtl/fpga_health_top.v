@@ -16,13 +16,17 @@
 // Controls:
 //   btnC      reset                    btnU     capture baseline (calibrate)
 //   sw[0]     1 = HELLO link test      sw[1]    1 = halt all ring oscillators
-//   sw[12..15] stress region R1..R4 (self-limiting on temperature / VCCINT)
+//   sw[12..14] stress region R1..R3 (self-limiting on temperature / VCCINT)
+//   sw[15]    TEST FAULT: R2's frequency count is reduced by 1/2^FAULT_SHIFT (about 0.8 %) so R2
+//             reads Warning while R1, R3, R4 and the overall state stay Healthy. It is an injected
+//             fault, not a measurement, and the packet flags it (S bit 3) so the host can label it.
 // LEDs (each LED sits under its switch):
 //   led[0], led[1]      sw0 / sw1: slow blink = switch off (has a function), solid = on
 //   led[2] healthy   led[3] warning   led[4] degraded   (all three off = not calibrated yet)
 //   led[11:5]           mirror sw[11:5] (those switches have no function)
-//   led[12..15]         stress switches R1..R4: slow blink = off, solid = heaters running,
+//   led[12..14]         stress switches R1..R3: slow blink = off, solid = heaters running,
 //                       fast blink = switch on but the safety cut-out is holding them off
+//   led[15]             test fault: slow blink = off, solid = R2 fault injected
 //////////////////////////////////////////////////////////////////////////////////
 
 module fpga_health_top #(
@@ -33,6 +37,8 @@ module fpga_health_top #(
     parameter UART_BAUD     = 115200,
     parameter WARN_SHIFT    = 8,         // 1/256 = 0.39 % drop => warning
     parameter DEG_SHIFT     = 6,         // 1/64  = 1.56 % drop => degraded
+    parameter FAULT_ALWAYS  = 0,         // 1 = the R2 test fault is permanently on (demo build; sw15 does nothing extra)
+    parameter FAULT_SHIFT   = 7,         // sw15 test fault: R2 count reduced by 1/128 = 0.78 % => warning
     parameter REGION_QUORUM = 2,         // regions that must be bad before the overall state changes
     parameter PAGE_TICKS    = 200000000, // display page time (2 s)
     parameter [15:0] BUILD_ID = 16'h0001  // set by build_bitstream.tcl; baselines are tied to it
@@ -129,7 +135,8 @@ module fpga_health_top #(
         else if (temp_code <= T_STRESS_ON)
             stress_ok <= 1'b1;
     end
-    wire [3:0] stress_en = sw_s1 & {4{stress_ok}};
+    wire [3:0] stress_en = {1'b0, sw_s1[2:0] & {3{stress_ok}}};   // sw15 is the R2 test fault, not a heater
+    wire       test_fault = sw_s1[3] | (FAULT_ALWAYS != 0);
 
     // -------------------------------------------------------------------------
     // Four regional health monitors
@@ -138,6 +145,10 @@ module fpga_health_top #(
     wire [3:0]  alive;
     wire [3:0]  rvalid;
     wire [3:0]  ro_clk_obs;
+    // R2's count as the rest of the design sees it: reduced when the sw15 test fault is on.
+    // Registered, so the subtract does not sit in the same clock cycle as the verdict logic.
+    reg  [23:0] cnt2_seen = 24'd0;
+    always @(posedge clk) cnt2_seen <= test_fault ? (cnt2 - (cnt2 >> FAULT_SHIFT)) : cnt2;
 
     regional_health_monitor #(.GATE_TICKS(GATE_TICKS), .TIMEOUT_TICKS(TIMEOUT_TICKS), .STRESS_LUTS(STRESS_LUTS))
     u_region1 (.clk(clk), .rst(rst), .i_en(ro_enable), .i_stress_en(stress_en[0]),
@@ -196,7 +207,7 @@ module fpga_health_top #(
     endfunction
 
     wire [1:0] rv1 = region_verdict(alive[0], cnt1, base1, calibrated);
-    wire [1:0] rv2 = region_verdict(alive[1], cnt2, base2, calibrated);
+    wire [1:0] rv2 = region_verdict(alive[1], cnt2_seen, base2, calibrated);
     wire [1:0] rv3 = region_verdict(alive[2], cnt3, base3, calibrated);
     wire [1:0] rv4 = region_verdict(alive[3], cnt4, base4, calibrated);
 
@@ -223,9 +234,12 @@ module fpga_health_top #(
     // A dead oscillator is a SENSOR FAULT, never evidence of health: the quorum must not outvote it,
     // so the overall state is at least Warning (Degraded still needs the quorum or a sensor limit).
     wire sensor_fault = ~(&alive);
-    wire [1:0] verdict = (region_deg  || sv == 2'd3)                 ? 2'd3 :
-                         (region_warn || sv == 2'd2 || sensor_fault) ? 2'd2 :
-                         any_uncal                                     ? 2'd0 : 2'd1;
+    wire [1:0] verdict_c = (region_deg  || sv == 2'd3)                 ? 2'd3 :
+                           (region_warn || sv == 2'd2 || sensor_fault) ? 2'd2 :
+                           any_uncal                                     ? 2'd0 : 2'd1;
+    // registered: the compare / quorum chain above is long, and the packet and LEDs only need the result
+    reg  [1:0] verdict = 2'd0;
+    always @(posedge clk) verdict <= verdict_c;
 
     // -------------------------------------------------------------------------
     // UART telemetry
@@ -240,9 +254,9 @@ module fpga_health_top #(
         .clk(clk),
         .rst(rst),
         .i_mode_select(sw[0]),
-        .i_cnt1(cnt1), .i_cnt2(cnt2), .i_cnt3(cnt3), .i_cnt4(cnt4),
+        .i_cnt1(cnt1), .i_cnt2(cnt2_seen), .i_cnt3(cnt3), .i_cnt4(cnt4),
         .i_alive(alive),
-        .i_stress(sw_s1),            // switch positions (the LEDs show whether the heaters really run)
+        .i_stress({test_fault, sw_s1[2:0]}),   // heater switches R1..R3; bit 3 = test fault active (sw15 or demo build)
         .i_temp(temp_code),
         .i_vccint(vccint_code),
         .i_vccaux(vccaux_code),
@@ -275,7 +289,7 @@ module fpga_health_top #(
     display_ctrl #(.PAGE_TICKS(PAGE_TICKS)) u_display (
         .clk(clk),
         .rst(rst),
-        .i_cnt1(cnt1), .i_cnt2(cnt2), .i_cnt3(cnt3), .i_cnt4(cnt4),
+        .i_cnt1(cnt1), .i_cnt2(cnt2_seen), .i_cnt3(cnt3), .i_cnt4(cnt4),
         .i_temp_code(temp_code),
         .o_seg(seg),
         .o_dp_n(dp),
@@ -301,6 +315,6 @@ module fpga_health_top #(
     assign led[12]    = sw[12] ? (stress_en[0] ? 1'b1 : blink_fast) : blink_slow;   // stress R1
     assign led[13]    = sw[13] ? (stress_en[1] ? 1'b1 : blink_fast) : blink_slow;   // stress R2
     assign led[14]    = sw[14] ? (stress_en[2] ? 1'b1 : blink_fast) : blink_slow;   // stress R3
-    assign led[15]    = sw[15] ? (stress_en[3] ? 1'b1 : blink_fast) : blink_slow;   // stress R4
+    assign led[15]    = (sw[15] || FAULT_ALWAYS != 0) ? 1'b1 : blink_slow;                                 // test fault on R2
 
 endmodule
