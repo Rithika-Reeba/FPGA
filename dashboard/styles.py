@@ -393,6 +393,14 @@ div[data-testid="stMetricValue"] {
     color: #00E5FF !important;
     border-color: rgba(0, 229, 255, 0.4) !important;
 }
+/* Test mode switch: very small and faint, pinned to the bottom-left corner; fully visible only on hover. */
+[data-testid="stSidebar"] .st-key-test_mode {
+    position: fixed; left: 8px; bottom: 4px; z-index: 50;
+    opacity: 0.12 !important; transform: scale(0.5); transform-origin: left bottom;
+    width: auto !important; transition: opacity .25s;
+}
+[data-testid="stSidebar"] .st-key-test_mode:hover { opacity: 0.9 !important; }
+
 /* Streamlit fades every element left over from the previous run to about a third of its brightness while
    the script runs, which turned the whole page nearly black on every refresh and board switch. Keep
    everything at full brightness instead. */

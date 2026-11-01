@@ -14,6 +14,7 @@ Supported Telemetry Streams:
 """
 
 import json
+import threading
 import time
 import sys
 from enum import Enum
@@ -76,6 +77,11 @@ class FPGAUARTReceiver:
 
         # Rolling packet rate estimation
         self._recent_timestamps: List[float] = []
+
+        # Several dashboard sessions (browser tabs) share one receiver. Opening and closing the port must be
+        # one step at a time: two sessions opening it together made the second one fail and throw away the
+        # first one's open handle, leaving the port locked at the OS while the dashboard said "closed".
+        self._conn_lock = threading.RLock()
 
     @property
     def is_port_open(self) -> bool:
@@ -437,7 +443,11 @@ class FPGAUARTReceiver:
             return []
 
     def connect(self, port: Optional[str] = None) -> bool:
-        """Open serial connection to the Basys 3 FPGA UART interface."""
+        """Open serial connection to the Basys 3 FPGA UART interface (safe to call from several sessions)."""
+        with self._conn_lock:
+            return self._connect_locked(port)
+
+    def _connect_locked(self, port: Optional[str] = None) -> bool:
         if port:
             if self.is_port_open and port != self.port:
                 self.disconnect()
@@ -500,6 +510,10 @@ class FPGAUARTReceiver:
 
     def disconnect(self):
         """Safely close serial port connection and reset state."""
+        with self._conn_lock:
+            self._disconnect_locked()
+
+    def _disconnect_locked(self):
         if self.serial_conn:
             try:
                 if getattr(self.serial_conn, "is_open", False):

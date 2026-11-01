@@ -217,6 +217,17 @@ def get_shared_uart_source(port: str) -> LiveUARTDataSource:
     return src
 
 
+def burn_selected_design(board_id):
+    """Program the monitored board: the normal design, or the R2 fault demo design when Test mode is on."""
+    from hardware.flash_manager import program_health_bitstream, get_bitstream_path
+    return program_health_bitstream(bitstream_path=get_bitstream_path(fault=bool(st.session_state.get("test_mode"))),
+                                    board_id=board_id)
+
+
+def burn_label() -> str:
+    return "🔥 Burn Precompiled Bitstream"
+
+
 def recalibrate_and_reload(port=None, force=True) -> None:
     """Record a baseline now (force: a fresh one; the board must be cool and idle), then reload
     every project module so the new numbers take effect everywhere without restarting the
@@ -545,12 +556,11 @@ with st.sidebar:
             st.markdown("Burn the precompiled health monitor bitstream (Ring Oscillator, XADC, PRBS-7, UART) into the board:")
             st.caption(f"Programs ONLY the board being monitored (found automatically from its USB port). "
                        "The design is lost when the board loses power.")
-            if st.button("🔥 Burn Precompiled Bitstream", width="stretch", disabled=not BOARD_CAL.get("board_id")):
+            if st.button(burn_label(), width="stretch", disabled=not BOARD_CAL.get("board_id")):
                 with st.spinner("Programming Basys 3 FPGA over JTAG..."):
                     try:
                         st.session_state.uart_source.disconnect()          # JTAG and UART share the USB chip
-                        from hardware.flash_manager import program_health_bitstream
-                        ok, msg = program_health_bitstream(board_id=BOARD_CAL.get("board_id"))
+                        ok, msg = burn_selected_design(BOARD_CAL.get("board_id"))
                     except Exception as e:
                         ok, msg = False, str(e)
                 if ok:
@@ -667,6 +677,12 @@ with st.sidebar:
     st.markdown("### 📋 Hardware Target")
     st.caption(f"**Device**: {DEVICE_NAME}\n\n**Process Node**: {ARCHITECTURE}\n\n**RO Inverter Stages (N)**: {RO_STAGES}\n\n**Sensor Package**: XADC Dual 12-bit 1MSPS + Ring Oscillator Aging Sensor")
 
+    # Test mode: a tiny, faint switch pinned to the bottom-left corner (see styles.py). When on, the Burn
+    # buttons write the R2 fault DEMO design instead of the normal one.
+    st.toggle("\u00a0", key="test_mode",
+              help="Test mode. On: the Burn buttons write the demo design with an injected R2 fault (R2 reads "
+                   "Degraded, the other regions and the overall state stay Healthy). Off: the normal design.")
+
 
 # =============================================================================
 # Data Acquisition & Feature Transformation
@@ -759,13 +775,12 @@ try:
                 )
                 col_f1, col_f2, col_f3 = st.columns(3)
                 with col_f1:
-                    if st.button("🔥 Burn Precompiled Bitstream Now", type="primary", use_container_width=True,
+                    if st.button(burn_label() + " Now", type="primary", use_container_width=True,
                                  disabled=not BOARD_CAL.get("board_id")):
                         with st.spinner("Burning fpga_health_top.bit into the monitored board over JTAG..."):
                             try:
                                 rcv.disconnect()                               # JTAG and UART share the USB chip
-                                from hardware.flash_manager import program_health_bitstream
-                                ok, msg = program_health_bitstream(board_id=BOARD_CAL.get("board_id"))
+                                ok, msg = burn_selected_design(BOARD_CAL.get("board_id"))
                             except Exception as e:
                                 ok, msg = False, str(e)
                         if ok:

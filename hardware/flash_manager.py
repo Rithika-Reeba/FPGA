@@ -26,13 +26,21 @@ DEFAULT_BACKUP_PATH = HARDWARE_DIR / "backup_original.bin"
 VIVADO_BAT = os.environ.get("VIVADO_PATH", r"C:\AMDDesignTools\2026.1\Vivado\bin\vivado.bat")
 
 
-def get_bitstream_path() -> Path:
-    """The most recently built bitstream among the usual places."""
-    candidates = [
-        Path(r"C:\vivado_build\build\fpga_health_top.bit"),
-        BUILD_DIR / "fpga_health_top.bit",
-        HARDWARE_DIR / "fpga_health_top.bit",
-    ]
+# The normal design, and the demo design with the R2 test fault permanently on (built with FPGA_FAULT_ALWAYS=1).
+NORMAL_BITSTREAMS = [
+    Path(r"C:\vivado_build\build\fpga_health_top.bit"),
+    BUILD_DIR / "fpga_health_top.bit",
+    HARDWARE_DIR / "fpga_health_top.bit",
+]
+FAULT_BITSTREAMS = [
+    Path(r"C:\vivado_build\build_fault\fpga_health_top.bit"),
+    HARDWARE_DIR / "fpga_health_top_fault.bit",
+]
+
+
+def get_bitstream_path(fault: bool = False) -> Path:
+    """The most recently built bitstream of the chosen design (normal, or the R2 fault demo)."""
+    candidates = FAULT_BITSTREAMS if fault else NORMAL_BITSTREAMS
     existing = [c for c in candidates if c.exists()]
     return max(existing, key=lambda c: c.stat().st_mtime) if existing else candidates[0]
 

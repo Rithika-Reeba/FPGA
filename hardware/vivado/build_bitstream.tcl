@@ -117,6 +117,10 @@ set local_bit "$proj_root/fpga_health_top.bit"
 if {!$fault_always} {   ;# the demo fault build must never replace the normal bitstream
     file copy -force $bitstream_path $local_bit
     puts "--> Copied fresh bitstream to: $local_bit"
+} else {                 ;# it has its own copy, used by the dashboard's Test mode
+    set local_fault "$proj_root/fpga_health_top_fault.bit"
+    file copy -force $bitstream_path $local_fault
+    puts "--> Copied fresh demo (fault) bitstream to: $local_fault"
 }
 
 puts "======================================================================"

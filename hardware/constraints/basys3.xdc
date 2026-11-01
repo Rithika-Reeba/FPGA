@@ -137,3 +137,9 @@ set_false_path -quiet -from [get_cells -hierarchical -quiet -filter {IS_SEQUENTI
 set_property CFGBVS VCCO [current_design]
 set_property CONFIG_VOLTAGE 3.3 [current_design]
 
+## Boot from the on-board QSPI flash (Spansion S25FL032P) at power-up: 4-bit SPI at 33 MHz, compressed.
+## Needed so the design written to the flash by program_flash.tcl loads by itself (JP1 jumper on QSPI).
+set_property BITSTREAM.GENERAL.COMPRESS TRUE [current_design]
+set_property BITSTREAM.CONFIG.CONFIGRATE 33 [current_design]
+set_property BITSTREAM.CONFIG.SPI_BUSWIDTH 4 [current_design]
+
