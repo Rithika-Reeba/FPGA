@@ -240,9 +240,17 @@ if "est_err_rate" not in st.session_state:
 # =============================================================================
 # Sidebar Control Panel
 # =============================================================================
+if "_goto_mode" in st.session_state:
+    st.session_state["data_mode_select"] = st.session_state.pop("_goto_mode")
+elif "data_mode_select" not in st.session_state:
+    st.session_state["data_mode_select"] = st.session_state.data_mode
+
 with st.sidebar:
     st.markdown("### 🎛️ Telemetry Source & Controls")
     
+    # The selector owns its value through a fixed key. (It used to recompute its starting position on
+    # every refresh, which made the source jump back and forth against the auto-refresh.) Code that
+    # wants to change the mode sets "_goto_mode"; it is applied below, before the widget is created.
     data_mode = st.selectbox(
         "Select Telemetry Source",
         [
@@ -251,11 +259,7 @@ with st.sidebar:
             "Physical UART Stream (Artix-7)",
             "Estimated Health Assessment"
         ],
-        index=0 if st.session_state.data_mode == "Mock Dataset (CSV Replay)" else (
-            1 if "Simulation" in st.session_state.data_mode else (
-                2 if "UART" in st.session_state.data_mode else 3
-            )
-        )
+        key="data_mode_select",
     )
     st.session_state.data_mode = data_mode
 
@@ -658,7 +662,7 @@ try:
                         st.rerun()
                 with col_btn2:
                     if st.button("📊 Switch to Simulation Mode", use_container_width=True):
-                        st.session_state.data_mode = "Dynamic Simulation Stream"
+                        st.session_state["_goto_mode"] = "Dynamic Simulation Stream"
                         st.rerun()
             else:
                 st.warning(
@@ -693,7 +697,7 @@ try:
                         st.rerun()
                 with col_f3:
                     if st.button("📊 Switch to Dynamic Simulation", use_container_width=True):
-                        st.session_state.data_mode = "Dynamic Simulation Stream"
+                        st.session_state["_goto_mode"] = "Dynamic Simulation Stream"
                         st.rerun()
 
             if rcv.is_port_open and st.session_state.get("auto_refresh", True):
