@@ -17,8 +17,8 @@
 //   btnC      reset                    btnU     capture baseline (calibrate)
 //   sw[0]     1 = HELLO link test      sw[1]    1 = halt all ring oscillators
 //   sw[12..14] stress region R1..R3 (self-limiting on temperature / VCCINT)
-//   sw[15]    TEST FAULT: R2's frequency count is reduced by 1/2^FAULT_SHIFT (about 0.8 %) so R2
-//             reads Warning while R1, R3, R4 and the overall state stay Healthy. It is an injected
+//   sw[15]    TEST FAULT: R2's frequency count is reduced by 1/2^FAULT_SHIFT (about 3 %) so R2
+//             reads Degraded while R1, R3, R4 and the overall state stay Healthy. It is an injected
 //             fault, not a measurement, and the packet flags it (S bit 3) so the host can label it.
 // LEDs (each LED sits under its switch):
 //   led[0], led[1]      sw0 / sw1: slow blink = switch off (has a function), solid = on
@@ -38,7 +38,7 @@ module fpga_health_top #(
     parameter WARN_SHIFT    = 8,         // 1/256 = 0.39 % drop => warning
     parameter DEG_SHIFT     = 6,         // 1/64  = 1.56 % drop => degraded
     parameter FAULT_ALWAYS  = 0,         // 1 = the R2 test fault is permanently on (demo build; sw15 does nothing extra)
-    parameter FAULT_SHIFT   = 7,         // sw15 test fault: R2 count reduced by 1/128 = 0.78 % => warning
+    parameter FAULT_SHIFT   = 5,         // sw15 test fault: R2 count reduced by 1/32 = 3.1 % => degraded (limit 1.56 %)
     parameter REGION_QUORUM = 2,         // regions that must be bad before the overall state changes
     parameter PAGE_TICKS    = 200000000, // display page time (2 s)
     parameter [15:0] BUILD_ID = 16'h0001  // set by build_bitstream.tcl; baselines are tied to it

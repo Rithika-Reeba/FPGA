@@ -49,9 +49,12 @@ def auto_baseline(port, force=False) -> dict:
     return ensure_calibration(port, force=force)
 
 
-# One shared choice of board for the baseline AND the serial receiver (they must never differ):
-# the board picked in the sidebar, else FPGA_PORT, else the first board found.
-BOARD_PORT = st.session_state.get("board_port") or os.environ.get("FPGA_PORT") or detect_board_port()
+# ONE board per server, followed by every browser tab: the baseline file and the serial ports are
+# shared by the whole server, so tabs that followed different boards overwrote each other's baseline
+# (a board's readings judged against another board's baseline, i.e. a false "Degraded").
+# The board picked last wins; else FPGA_PORT; else the first board found.
+BOARD_PORT = getattr(sys, "_fpga_board_port", None) or os.environ.get("FPGA_PORT") or detect_board_port()
+sys._fpga_board_port = BOARD_PORT
 # One baseline read per request: recalibrate_and_reload() only sets these flags; the read happens here.
 _force_recal = st.session_state.pop("_force_recal", False)
 BOARD_CAL = auto_baseline(BOARD_PORT, _force_recal)
@@ -184,6 +187,7 @@ def recalibrate_and_reload(port=None, force=True) -> None:
     release_all_serial_ports()                             # free every serial port first
     port = port or BOARD_PORT
     if port:
+        sys._fpga_board_port = port                         # every tab follows this board from now on
         st.session_state["board_port"] = port
     st.session_state["_force_recal"] = bool(force)          # the baseline is read once, at the top of the rerun
     st.session_state["_recal_pending"] = True
@@ -224,6 +228,9 @@ if "mock_source" not in st.session_state:
         st.session_state.mock_source = MockCSVDataSource()
     except Exception:
         st.session_state.mock_source = None
+if "uart_source" in st.session_state and detected_fpga_port \
+        and st.session_state.uart_source.receiver.port != detected_fpga_port:
+    st.session_state.pop("uart_source")                    # another tab switched boards: follow it
 if "uart_source" not in st.session_state:
     initial_port = detected_fpga_port or "COM10"
     st.session_state.uart_source = get_shared_uart_source(initial_port)

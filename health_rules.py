@@ -55,7 +55,7 @@ AUTOCAL_MAX_REL_STD = 0.0005  # per-region frequency std/mean must stay below 0.
 
 # The board's sw15 / demo-build test fault lowers R2's count by 1/2**TEST_FAULT_SHIFT (RTL: FAULT_SHIFT).
 # A baseline recorded while the fault is on is corrected by the same factor, so it is R2's TRUE baseline.
-TEST_FAULT_SHIFT = 7
+TEST_FAULT_SHIFT = 5
 
 # Functional error rate (fraction of bad bits). Not produced by the current board
 # firmware; kept for the simulated sources and for a future hardware canary path.

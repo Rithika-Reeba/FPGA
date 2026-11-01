@@ -53,3 +53,6 @@ vivado_pid*.str
 
 # Machine-local baseline recorded automatically from the connected board
 hardware/host/calibration.json
+
+# Generated Vivado project (rebuild with hardware/vivado/refresh_project.tcl)
+vivado_project/

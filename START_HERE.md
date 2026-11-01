@@ -73,7 +73,7 @@ Nothing is ever recorded from a hot or stressed board, so it can never become th
 | SW0 (rightmost) | **Down = telemetry.** Up = HELLO link test (no readings) |
 | SW1 | Up = stop all ring oscillators (simulates dead sensors; chip goes at least Warning) |
 | SW12, SW13, SW14 | Stress heaters in R1, R2, R3: **really heat the chip**. Self-limiting on temperature. Expect Warning, then Degraded, as it heats |
-| **SW15** | **Test fault on R2.** R2 shows **Warning**, R1, R3, R4 stay Healthy, overall stays Healthy. It is an injected fault, not a measurement, and the dashboard says so in a banner |
+| **SW15** | **Test fault on R2.** R2 shows **Degraded**, R1, R3, R4 stay Healthy, overall stays Healthy. It is an injected fault, not a measurement, and the dashboard says so in a one-line note |
 | btnC (centre) | Reset |
 | btnU (top) | Capture the board's own LED baseline (only accepted when cool and every stress switch is down) |
 
@@ -83,7 +83,7 @@ while their switch is down and are solid while it is up. The four-digit display 
 ### 3.4 The usual demo
 
 1. All switches down: every region and the overall state show **Healthy**.
-2. Raise **SW15**: R2 shows **Warning**; the others and the overall state stay Healthy (the overall state only changes when
+2. Raise **SW15**: R2 shows **Degraded**; the others and the overall state stay Healthy (the overall state only changes when
    at least two regions are bad). A banner says it is a test fault.
 3. Lower SW15. Optional real stress: raise **SW12 + SW13 + SW14** for a minute. Several regions slow down together
    and the overall state moves to Warning or Degraded. **Lower them afterwards** so the chip cools; the heaters switch
@@ -108,7 +108,7 @@ if it moves.
 
 ## 4b. See the four physical partitions (Pblocks) in Vivado
 
-- **The project:** double-click `open_vivado.bat` (opens `C:\vivado_projects\fpga_health_project\fpga_health_project.xpr`).
+- **The project:** double-click `open_vivado.bat` (opens `vivado_project\fpga_health_project.xpr` in this folder, the healthy design).
   In Flow Navigator choose **Open Implemented Design**, then look at the **Device** window: the four rectangles
   `pblock_R1` to `pblock_R4` are the regions (R1 top-left, R2 top-right, R3 bottom-left, R4 bottom-right).
   If the project is out of date, regenerate it from the current design (about 10 minutes):
