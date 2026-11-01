@@ -83,6 +83,13 @@ class FPGAUARTReceiver:
         # first one's open handle, leaving the port locked at the OS while the dashboard said "closed".
         self._conn_lock = threading.RLock()
 
+        # A port opened while the board's USB link was re-enumerating (right after it was programmed or replugged)
+        # can stay open but silent for good. If a connection hears nothing for REOPEN_AFTER_S, close and open the
+        # port again (at most MAX_SILENT_REOPENS times per connect), which recovers it by itself.
+        self.REOPEN_AFTER_S = 8.0
+        self.MAX_SILENT_REOPENS = 2
+        self._silent_reopens = 0
+
     @property
     def is_port_open(self) -> bool:
         """Returns True if the OS serial port handle is open."""
@@ -448,6 +455,7 @@ class FPGAUARTReceiver:
             return self._connect_locked(port)
 
     def _connect_locked(self, port: Optional[str] = None) -> bool:
+        self._silent_reopens = 0
         if port:
             if self.is_port_open and port != self.port:
                 self.disconnect()
@@ -524,6 +532,23 @@ class FPGAUARTReceiver:
         self.state = ConnectionState.DISCONNECTED
         self.handshake_detected = False
 
+    def _reopen_silent_port(self) -> None:
+        """Close and reopen the port of a connection that never heard a packet (see REOPEN_AFTER_S)."""
+        with self._conn_lock:
+            self._silent_reopens += 1
+            port = self.port
+            self._disconnect_locked()
+            try:
+                self.serial_conn = serial.Serial(port=port, baudrate=self.baudrate, bytesize=serial.EIGHTBITS,
+                                                 parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE,
+                                                 timeout=self.timeout)
+                self.state = ConnectionState.PORT_OPEN_WAITING
+                self.connection_start_time = time.time()
+            except Exception as exc:                  # still unreachable: leave it closed, auto-connect retries
+                self.serial_conn = None
+                self.state = ConnectionState.ERROR
+                self.last_error_msg = f"Could not reopen {port}: {exc}"
+
     def read_packet(self) -> Optional[Dict[str, Any]]:
         """
         Read and decode a single telemetry packet from the FPGA UART stream.
@@ -547,6 +572,13 @@ class FPGAUARTReceiver:
                     f"Port '{self.port}' is open, but no FPGA telemetry packets have arrived. "
                     f"Ensure you selected the Basys 3 port, board is powered, and health bitstream is burned."
                 )
+
+        if (self.packet_count == 0 and self.connection_start_time > 0
+                and (now - self.connection_start_time) > self.REOPEN_AFTER_S
+                and self._silent_reopens < self.MAX_SILENT_REOPENS):
+            self._reopen_silent_port()
+            if not self.is_connected or not self.serial_conn:
+                return None
 
         try:
             in_waiting = getattr(self.serial_conn, "in_waiting", 0)
