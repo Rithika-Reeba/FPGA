@@ -224,6 +224,12 @@ def burn_selected_design(board_id):
                                     board_id=board_id)
 
 
+def _on_test_toggle() -> None:
+    """Flipping the switch loads the matching design into the board: on = fault demo, off = normal.
+    Temporary only (FPGA volatile memory); the program stored in the board's flash is never touched."""
+    st.session_state["_burn_pending"] = True
+
+
 def burn_label() -> str:
     return "🔥 Burn Precompiled Bitstream"
 
@@ -250,6 +256,22 @@ def recalibrate_and_reload(port=None, force=True) -> None:
         st.session_state.pop(key, None)
     st.rerun()
 
+
+# A flip of the switch asked for a design change: program the board now (about 30 s; the skeleton shows),
+# then re-record the baseline for the new build. Temporary: nothing is written to the board's flash.
+if st.session_state.pop("_burn_pending", False) and BOARD_CAL.get("board_id"):
+    _skeleton.html(skeleton_html("Programming the board (about 30 seconds)..."))
+    with SERIAL_LOCK:
+        release_all_serial_ports()                      # JTAG and UART share the board's USB chip
+        try:
+            _ok, _msg = burn_selected_design(BOARD_CAL.get("board_id"))
+        except Exception as _exc:
+            _ok, _msg = False, str(_exc)
+    st.session_state["_burn_msg"] = (_ok, _msg)
+    recalibrate_and_reload(port=BOARD_PORT, force=False)
+_bm = st.session_state.pop("_burn_msg", None)
+if _bm:
+    st.toast(_bm[1], icon="✅" if _bm[0] else "⚠️")
 
 # =============================================================================
 # Session State Initialization
@@ -679,7 +701,7 @@ with st.sidebar:
 
     # Test mode: a tiny, faint switch pinned to the bottom-left corner (see styles.py). When on, the Burn
     # buttons write the R2 fault DEMO design instead of the normal one.
-    st.toggle("\u00a0", key="test_mode",
+    st.toggle("\u00a0", key="test_mode", on_change=_on_test_toggle,
               help="Test mode. On: the Burn buttons write the demo design with an injected R2 fault (R2 reads "
                    "Degraded, the other regions and the overall state stay Healthy). Off: the normal design.")
 
