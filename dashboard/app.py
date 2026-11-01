@@ -76,14 +76,31 @@ def release_all_serial_ports() -> None:
             pass
 
 
-@st.cache_resource(show_spinner=False)
+# The baseline result is remembered by the SERVER (not by Streamlit's cache, which kept re-running the 6 s read
+# of a silent board on every refresh, so the page never finished). A good result is kept until a board switch or a
+# new build clears it; a failed one ("no telemetry") is kept for 20 s, so a silent board is polled, not hammered.
+if not hasattr(sys, "_fpga_cal_memo"):
+    sys._fpga_cal_memo = {}
+_CAL_MEMO = sys._fpga_cal_memo
+_CAL_RETRY_S = 20.0
+
+
 def auto_baseline(port, force=False) -> dict:
     if not port:
         return {"state": "no-board", "port": None, "board_id": None, "build_id": None,
                 "reason": "no Basys 3 detected on USB"}
+    key = (port, bool(force))
     with SERIAL_LOCK:
+        hit = _CAL_MEMO.get(key)
+        if hit and (hit[1].get("state") in ("ok", "created") or time.time() - hit[0] < _CAL_RETRY_S):
+            return hit[1]
         release_all_serial_ports()
-        return ensure_calibration(port, force=force)
+        result = ensure_calibration(port, force=force)
+        _CAL_MEMO[key] = (time.time(), result)
+        return result
+
+
+auto_baseline.clear = _CAL_MEMO.clear
 
 
 # ONE board per server, followed by every browser tab: the baseline file and the serial ports are
@@ -420,10 +437,18 @@ with st.sidebar:
         if len(_boards) > 1:
             _labels = [f"{dev} - board {bid}" for dev, bid in _boards]
             _cur = next((i for i, (dev, _) in enumerate(_boards) if dev == BOARD_PORT), 0)
-            _pick = st.selectbox("Board to monitor", _labels, index=_cur, key="board_pick")
-            _new_port = _boards[_labels.index(_pick)][0]
-            if _new_port != BOARD_PORT:
-                recalibrate_and_reload(port=_new_port, force=False)
+            # The board is chosen for the WHOLE server, so every tab must show the active one. A tab that kept
+            # its own earlier choice used to "switch" the server back on every refresh, and two tabs with
+            # different choices switched it back and forth forever. Only a real change of the picker acts.
+            _switch_to = st.session_state.pop("_switch_to", None)
+            if _switch_to and _switch_to != BOARD_PORT:
+                recalibrate_and_reload(port=_switch_to, force=False)
+            st.session_state["board_pick"] = _labels[_cur]
+
+            def _on_board_pick(_ports=[dev for dev, _ in _boards], _labels=_labels):
+                st.session_state["_switch_to"] = _ports[_labels.index(st.session_state["board_pick"])]
+
+            st.selectbox("Board to monitor", _labels, key="board_pick", on_change=_on_board_pick)
         _icon = {"ok": "🟢", "created": "🟢", "waiting": "🟡", "error": "🔴"}.get(BOARD_CAL["state"], "⚪")
         st.caption(f"{_icon} **Baseline**: {BOARD_CAL['reason']}  \nRecorded automatically from the connected board. Build `{BOARD_CAL['build_id']}`")
         _recal = st.session_state.pop("_recal_msg", None)
