@@ -28,9 +28,25 @@ if str(PROJECT_ROOT) not in sys.path:
 from dashboard.skeleton import skeleton_html
 
 _skeleton = st.empty()
-if not st.session_state.get("_ui_loaded") or st.session_state.get("_recal_pending"):
-    _skeleton.html(skeleton_html("Loading the dashboard: connecting to the board and recording its baseline "
-                                 "(10 to 20 seconds the first time or after switching boards)"))
+
+
+def _finish_loading() -> None:
+    """The real page (or an error screen) takes over: remove the skeleton and remember what is on screen."""
+    _skeleton.empty()
+    st.session_state["_ui_loaded"] = True
+    st.session_state["_rendered_mode"] = st.session_state.get("data_mode_select")
+
+
+# Show it on the first load, during a board switch, and whenever another telemetry source is picked
+# (the selector's value is already in session state when the script starts).
+_picked = st.session_state.get("data_mode_select")
+_source_changed = st.session_state.get("_ui_loaded") and _picked != st.session_state.get("_rendered_mode")
+if not st.session_state.get("_ui_loaded") or st.session_state.get("_recal_pending") or _source_changed:
+    if _source_changed and not st.session_state.get("_recal_pending"):
+        _skeleton.html(skeleton_html(f"Switching to {_picked}..."))
+    else:
+        _skeleton.html(skeleton_html("Loading the dashboard: connecting to the board and recording its baseline "
+                                     "(10 to 20 seconds the first time or after switching boards)"))
 
 # -----------------------------------------------------------------------------
 # Automatic board baseline. Must run BEFORE the config modules are imported (they read the
@@ -205,6 +221,8 @@ def recalibrate_and_reload(port=None, force=True) -> None:
     """Record a baseline now (force: a fresh one; the board must be cool and idle), then reload
     every project module so the new numbers take effect everywhere without restarting the
     server. Also used to switch to another board (port given, force off)."""
+    _skeleton.html(skeleton_html("Switching board: connecting and recording its baseline "
+                                 "(10 to 20 seconds)"))          # show it the instant a board is picked
     release_all_serial_ports()                             # free every serial port first
     port = port or BOARD_PORT
     if port:
@@ -628,7 +646,7 @@ with st.sidebar:
         if not est_valid:
             for err in est_errors:
                 st.error(f"❌ {err}")
-            _skeleton.empty()
+            _finish_loading()
             st.stop()
         elif est_warnings:
             for warn in est_warnings:
@@ -657,7 +675,7 @@ model, model_features, model_error = load_ml_pipeline()
 
 if model_error:
     st.error(f"⚠️ {model_error}")
-    _skeleton.empty()
+    _finish_loading()
     st.stop()
 
 # Select appropriate data source
@@ -702,6 +720,7 @@ try:
         # or telemetry that went quiet must never leave the last reading on screen as "live".
         _stale = bool(meta.get("is_stale", False))
         if not meta.get("has_real_data", False) or _stale:
+            _finish_loading()          # this screen refreshes itself (sleep + rerun below): remove the skeleton first
             rcv = st.session_state.uart_source.receiver
             st.markdown("### 🔌 Basys 3 Hardware Interface Status")
             if _stale:
@@ -762,13 +781,13 @@ try:
             if rcv.is_port_open and st.session_state.get("auto_refresh", True):
                 time.sleep(1)
                 st.rerun()
-            _skeleton.empty()
+            _finish_loading()
             st.stop()
 
 except Exception as e:
     st.error(f"Sensor data stream unavailable: {str(e)}")
     st.info("Waiting for valid FPGA telemetry stream...")
-    _skeleton.empty()
+    _finish_loading()
     st.stop()
 
 
@@ -796,7 +815,7 @@ try:
     missing_feats = [f for f in model_features if f not in history_df.columns]
     if missing_feats:
         st.error(f"Missing required engineered features: {missing_feats}")
-        _skeleton.empty()
+        _finish_loading()
         st.stop()
 
     # The model was trained on data whose healthy RO frequency is the placeholder nominal. Express
@@ -829,7 +848,7 @@ try:
 
 except Exception as e:
     st.error(f"ML Model inference error: {str(e)}")
-    _skeleton.empty()
+    _finish_loading()
     st.stop()
 
 
@@ -919,8 +938,7 @@ if "UART" in st.session_state.data_mode and BOARD_CAL["state"] in ("waiting", "e
     )
 
 # 1. Header, FPGA Chip Logo, Monitoring Status
-_skeleton.empty()
-st.session_state["_ui_loaded"] = True
+_finish_loading()
 render_header(
     status_label="ESTIMATED MODE" if "Estimated" in data_mode else "ACTIVE",
     source_label=source_badge,

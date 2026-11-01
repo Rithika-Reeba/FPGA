@@ -393,6 +393,13 @@ div[data-testid="stMetricValue"] {
     color: #00E5FF !important;
     border-color: rgba(0, 229, 255, 0.4) !important;
 }
+/* Streamlit fades every element left over from the previous run to about a third of its brightness while
+   the script runs, which turned the whole page nearly black on every refresh and board switch. Keep
+   everything at full brightness instead. */
+[data-stale="true"], .stale-element, [data-testid="stMain"] [data-stale="true"] {
+    opacity: 1 !important;
+    transition: none !important;
+}
 </style>
 """).strip()
 

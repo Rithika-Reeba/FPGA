@@ -124,7 +124,7 @@ def ensure_calibration(port: str, force: bool = False) -> Dict[str, Any]:
     try:
         # Two packets are enough to learn which build runs and whether the saved baseline matches;
         # the full 20 (about 10 s) are only read when a new baseline has to be recorded.
-        samples = read_packets(port, 2)
+        samples = read_packets(port, 2, timeout_s=6.0)       # a silent board is reported after 6 s, not 20
     except Exception as exc:                                   # port busy, unplugged, ...
         return {"state": "error", "port": port, "board_id": board_id, "build_id": None, "reason": f"cannot read {port}: {exc}"}
 

@@ -19,6 +19,9 @@ _CSS = """
 .sk-section { height: 26px; width: 38%; margin: 22px 0 12px 0; }
 @keyframes sk-shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
 @keyframes sk-pulse { 0%, 100% { opacity: .35; transform: scale(.85); } 50% { opacity: 1; transform: scale(1); } }
+/* while the skeleton is up, hide the previous board's content in the main area so only the skeleton shows */
+[data-testid="stMain"]:has(.sk-block) .stElementContainer[data-stale="true"]:not(:has(.sk-block)) { display: none !important; }
+[data-stale="true"] { opacity: 1 !important; transition: none !important; }
 @media (max-width: 700px) { .sk-row { grid-template-columns: repeat(2, 1fr); } .sk-grid { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .sk-block, .sk-dot { animation: none; } }
 </style>

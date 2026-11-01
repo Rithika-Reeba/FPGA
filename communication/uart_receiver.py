@@ -572,6 +572,14 @@ class FPGAUARTReceiver:
                 else:
                     self.error_count += 1
 
+        except (serial.SerialException, OSError) as e:
+            # The USB link to the board was lost (cable, connector, power dip). The handle is dead for good,
+            # so close it: the dashboard's auto-connect then opens the port again when the board is back.
+            self.error_count += 1
+            self.disconnect()
+            self.last_error_msg = (f"The USB connection to the board on {self.port} was lost ({e}). "
+                                   "Reconnecting automatically; if it does not return, reseat the USB cable.")
+            return None
         except Exception as e:
             self.last_error_msg = str(e)
             self.error_count += 1

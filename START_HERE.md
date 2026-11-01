@@ -108,7 +108,10 @@ if it moves.
 
 ## 4b. See the four physical partitions (Pblocks) in Vivado
 
-- **The project:** double-click `open_vivado.bat` (opens `vivado_project\fpga_health_project.xpr` in this folder, the healthy design).
+- **The project:** double-click `open_vivado.bat` (the healthy design). It opens the project by its real location,
+  `C:\vivado_projects\fpga_health_project\fpga_health_project.xpr`. `vivado_project` in this folder is a link to that
+  folder for browsing; **do not open the `.xpr` through the link**, Vivado then looks for the source files in the wrong
+  place and reports 17 critical warnings.
   In Flow Navigator choose **Open Implemented Design**, then look at the **Device** window: the four rectangles
   `pblock_R1` to `pblock_R4` are the regions (R1 top-left, R2 top-right, R3 bottom-left, R4 bottom-right).
   If the project is out of date, regenerate it from the current design (about 10 minutes):
